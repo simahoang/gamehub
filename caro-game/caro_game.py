@@ -9,7 +9,8 @@ socketio = None
 
 # --- TRẠNG THÁI GAME ---
 BOARD_SIZE = 20 # BẠN CÓ THỂ ĐỔI THÀNH SỐ BẤT KỲ (15, 20, 25...)
-VERSION = "v2.3"
+VERSION = "v2.3.1"
+COUNTDOWN_SECONDS = 8
 
 # --- CONFIG ---
 # Bật (True) để cho phép cùng 1 IP cầm cả X và O (dùng khi self-test).
@@ -445,6 +446,7 @@ function sendChat() {{
 """
 
 def check_win(board, row, col, piece):
+    opponent = 'O' if piece == 'X' else 'X'
     directions = [(0, 1), (1, 0), (1, 1), (1, -1)]
     for dr, dc in directions:
         # Lưu các ô chiến thắng vào mảng
@@ -455,19 +457,28 @@ def check_win(board, row, col, piece):
         while 0 <= r < BOARD_SIZE and 0 <= c < BOARD_SIZE and board[r][c] == piece:
             winning_cells.append((r, c))
             r += dr; c += dc
+        forward_r, forward_c = r, c
             
         # Đi theo chiều ngược lại
         r, c = row - dr, col - dc
         while 0 <= r < BOARD_SIZE and 0 <= c < BOARD_SIZE and board[r][c] == piece:
             winning_cells.append((r, c))
             r -= dr; c -= dc
+        backward_r, backward_c = r, c
             
         if len(winning_cells) == 5:
-            return winning_cells # Trả về mảng tọa độ thay vì True
+            opponent_blocks = 0
+            if 0 <= forward_r < BOARD_SIZE and 0 <= forward_c < BOARD_SIZE and board[forward_r][forward_c] == opponent:
+                opponent_blocks += 1
+            if 0 <= backward_r < BOARD_SIZE and 0 <= backward_c < BOARD_SIZE and board[backward_r][backward_c] == opponent:
+                opponent_blocks += 1
+            if opponent_blocks < 2:
+                return winning_cells # Trả về mảng tọa độ thay vì True
             
     return None
 
 def check_threat_pattern(board, row, col, dr, dc, piece):
+    opponent = 'O' if piece == 'X' else 'X'
     cells = [(row, col)]
 
     # Scan forward từ vị trí bắt đầu
@@ -505,6 +516,22 @@ def check_threat_pattern(board, row, col, dr, dc, piece):
             pr, pc = forward_end_r + dr, forward_end_c + dc
             if 0 <= pr < BOARD_SIZE and 0 <= pc < BOARD_SIZE and board[pr][pc] == piece:
                 skip = True
+        # Kiểm tra đối thủ chặn 2 đầu: nếu đầu bị chặn là quân đối thủ
+        # và ô beyond (cách 2 vị trí theo hướng hở) cũng là quân đối thủ
+        # → lấp đầu hở tạo chuỗi 5 bị chặn 2 đầu → không thắng → skip
+        if not skip:
+            if backward_open and not forward_open:
+                if (0 <= forward_end_r < BOARD_SIZE and 0 <= forward_end_c < BOARD_SIZE
+                        and board[forward_end_r][forward_end_c] == opponent):
+                    br, bc = backward_end_r - dr, backward_end_c - dc
+                    if 0 <= br < BOARD_SIZE and 0 <= bc < BOARD_SIZE and board[br][bc] == opponent:
+                        skip = True
+            elif forward_open and not backward_open:
+                if (0 <= backward_end_r < BOARD_SIZE and 0 <= backward_end_c < BOARD_SIZE
+                        and board[backward_end_r][backward_end_c] == opponent):
+                    br, bc = forward_end_r + dr, forward_end_c + dc
+                    if 0 <= br < BOARD_SIZE and 0 <= bc < BOARD_SIZE and board[br][bc] == opponent:
+                        skip = True
         if not skip:
             result.extend(cells)
 
@@ -740,7 +767,7 @@ def handle_move(data):
             r_data['win_cells'] = win_cells
             r_data['threat_cells'] = []
             r_data['game_over'] = True
-            r_data['countdown_seconds'] = 6
+            r_data['countdown_seconds'] = COUNTDOWN_SECONDS
             emit('game_over', {
                 'board': r_data['board'], 
                 'winner': piece,
@@ -796,7 +823,7 @@ def handle_surrender(data):
     r_data['win_cells'] = None
     r_data['threat_cells'] = []
     r_data['game_over'] = True
-    r_data['countdown_seconds'] = 6
+    r_data['countdown_seconds'] = COUNTDOWN_SECONDS
     emit('game_over', {
         'board': r_data['board'],
         'winner': winner,
