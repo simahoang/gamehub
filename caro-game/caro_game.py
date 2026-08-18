@@ -9,7 +9,7 @@ socketio = None
 
 # --- TRẠNG THÁI GAME ---
 BOARD_SIZE = 20 # BẠN CÓ THỂ ĐỔI THÀNH SỐ BẤT KỲ (15, 20, 25...)
-VERSION = "v2.3.1"
+VERSION = "v2.4"
 COUNTDOWN_SECONDS = 8
 
 # --- CONFIG ---
@@ -22,9 +22,9 @@ def create_empty_board():
 
 # Mở sẵn 3 phòng cố định (Thêm trường win_cells để lưu chuỗi ô chiến thắng)
 rooms = {
-    'Phòng 1': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_over': False, 'countdown_seconds': 0, 'chat_history': []},
-    'Phòng 2': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_over': False, 'countdown_seconds': 0, 'chat_history': []},
-    'Phòng 3': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_over': False, 'countdown_seconds': 0, 'chat_history': []},
+    'Phòng 1': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': []},
+    'Phòng 2': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': []},
+    'Phòng 3': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': []},
 }       
 user_rooms = {}
 
@@ -61,6 +61,10 @@ HTML_PAGE = f"""
         h1 {{ color: #333; margin-bottom: 5px; }}
         #info {{ font-size: 18px; font-weight: bold; margin-bottom: 15px; color: #555; }}
         #role {{ font-size: 16px; color: #888; margin-bottom: 20px; }}
+        #seat-panel {{ display: flex; flex-direction: column; gap: 6px; margin: 5px auto 15px auto; max-width: 400px; }}
+        .seat-row {{ display: flex; justify-content: center; align-items: center; gap: 10px; }}
+        .seat-label {{ font-weight: bold; color: #444; }}
+        .seat-row button {{ padding: 5px 14px; font-size: 14px; }}
         
         /* Giao diện sảnh chờ */
         #lobby-wrapper {{ display: flex; justify-content: center; margin-top: 50px; }}
@@ -202,9 +206,7 @@ HTML_PAGE = f"""
         <div class="lobby-box">
             <h3>🏠 Danh sách phòng</h3>
             <p style="font-size: 14px; color: #666;">Bấm vào để vào chơi ngay</p>
-            <button class="btn-room" onclick="joinSpecificRoom('Phòng 1')">🚪 Phòng 1</button>
-            <button class="btn-room" onclick="joinSpecificRoom('Phòng 2')">🚪 Phòng 2</button>
-            <button class="btn-room" onclick="joinSpecificRoom('Phòng 3')">🚪 Phòng 3</button>
+            <div id="room-list"></div>
         </div>
     </div>
 
@@ -213,6 +215,19 @@ HTML_PAGE = f"""
         <h2 id="roomTitle" style="color: #d9534f; margin-top: 0;"></h2>
         <div id="info">Đang kết nối...</div>
         <div id="role"></div>
+        <div id="seat-panel">
+            <div class="seat-row">
+                <span class="seat-label">Ghế X:</span> <span id="seat-x-name">Trống</span>
+                <button id="sit-x-btn" onclick="sit('X')" style="display:none;">Ngồi X</button>
+            </div>
+            <div class="seat-row">
+                <span class="seat-label">Ghế O:</span> <span id="seat-o-name">Trống</span>
+                <button id="sit-o-btn" onclick="sit('O')" style="display:none;">Ngồi O</button>
+            </div>
+            <div class="seat-row">
+                <button id="stand-btn" onclick="stand()" style="display:none;">Đứng lên</button>
+            </div>
+        </div>
         <div id="board-wrapper" style="overflow: auto; max-width: 100%;">
             <div id="board"></div>
         </div>
@@ -241,9 +256,14 @@ HTML_PAGE = f"""
         let myPiece = '';
         let myName = '';
         let isMyTurn = false;
+        let gameActive = false;
+        let currentTurn = 'X';
         let currentRoom = '';
         let threatEnabled = true;
         let lastBoardState = null;
+        
+        socket.on('connect', () => {{ socket.emit('get_rooms', {{}}); }});
+        socket.on('room_list', (data) => {{ renderRoomList(data.rooms); }});
         
         const size = {BOARD_SIZE}; 
 
@@ -274,20 +294,28 @@ HTML_PAGE = f"""
             location.reload(); 
         }}
 
+        function renderRoomList(rooms) {{
+            const list = document.getElementById('room-list');
+            list.innerHTML = '';
+            (rooms || []).forEach(r => {{
+                let label;
+                if (r.seated === 0) label = 'Trống';
+                else if (r.seated === 1) label = 'Đang đợi';
+                else label = 'Đầy';
+                const btn = document.createElement('button');
+                btn.className = 'btn-room';
+                btn.innerText = '🚪 ' + r.room + ' — ' + label;
+                btn.onclick = () => joinSpecificRoom(r.room);
+                list.appendChild(btn);
+            }});
+        }}
+
         socket.on('init', (data) => {{
             myPiece = data.piece;
+            gameActive = !!data.game_active;
             myName = data.player_name || 'Unknown';
-            const surBtn = document.getElementById('surrender-btn');
-            if (myPiece === 'X' || myPiece === 'O') {{
-                surBtn.style.display = 'inline-block';
-            }} else {{
-                surBtn.style.display = 'none';
-            }}
-            if (myPiece === 'X' || myPiece === 'O') {{
-                document.getElementById('role').innerText = `Xin chào ${{myName}}! Bạn cầm quân: ${{myPiece}}`;
-            }} else {{
-                document.getElementById('role').innerText = `Xin chào ${{myName}}! Phòng đã đầy! Bạn đang xem dưới tư cách Khán Giả.`;
-            }}
+            currentTurn = data.turn;
+            updateRole();
             const chatContainer = document.getElementById('chat-messages');
             chatContainer.innerHTML = '';
             if (data.chat_history) {{
@@ -310,15 +338,17 @@ HTML_PAGE = f"""
         }});
 
         socket.on('update', (data) => {{
+            if (data.game_active !== undefined) gameActive = !!data.game_active;
             updateBoard(data.board, data.last_move, null, data.threat_cells);
             updateTurn(data.turn);
         }});
 
         socket.on('game_over', (data) => {{
+            if (data.game_active !== undefined) gameActive = !!data.game_active;
             updateBoard(data.board, data.last_move, data.win_cells, data.threat_cells);
             let msg;
             if (data.surrender) {{
-                msg = data.winner_name + ' đã đầu hàng — ' + data.winner + ' THẮNG!';
+                msg = data.surrenderer_name + ' đã đầu hàng — ' + data.winner_name + ' (' + data.winner + ') THẮNG!';
             }} else {{
                 msg = data.winner + ' ĐÃ CHIẾN THẮNG!';
             }}
@@ -336,9 +366,16 @@ HTML_PAGE = f"""
         }});
 
         socket.on('player_list', (data) => {{
+            if (data.game_active !== undefined) gameActive = !!data.game_active;
+            const players = data.players;
+            const me = players.find(p => p.sid === socket.id);
+            if (me) {{
+                myPiece = me.piece;
+                myName = me.name;
+            }}
             const container = document.getElementById('player-list-content');
             container.innerHTML = '';
-            data.players.forEach(p => {{
+            players.forEach(p => {{
                 const div = document.createElement('div');
                 div.className = 'player-item';
                 let pieceLabel = '';
@@ -348,7 +385,40 @@ HTML_PAGE = f"""
                 div.innerHTML = p.name + pieceLabel;
                 container.appendChild(div);
             }});
+            updateSeatPanel(players);
+            updateRole();
+            updateTurn(currentTurn);
         }});
+
+        function updateRole() {{
+            const surBtn = document.getElementById('surrender-btn');
+            if (myPiece === 'X' || myPiece === 'O') {{
+                document.getElementById('role').innerText = `Bạn cầm quân: ${{myPiece}}`;
+                surBtn.style.display = 'inline-block';
+            }} else {{
+                document.getElementById('role').innerText = 'Bạn đang đứng (khán giả) — bấm Ngồi để chơi';
+                surBtn.style.display = 'none';
+            }}
+        }}
+
+        function updateSeatPanel(players) {{
+            const seatX = players.find(p => p.piece === 'X');
+            const seatO = players.find(p => p.piece === 'O');
+            document.getElementById('seat-x-name').innerText = seatX ? seatX.name : 'Trống';
+            document.getElementById('seat-o-name').innerText = seatO ? seatO.name : 'Trống';
+            const locked = (gameActive === true);
+            document.getElementById('sit-x-btn').style.display = (!locked && !seatX && myPiece === '') ? 'inline-block' : 'none';
+            document.getElementById('sit-o-btn').style.display = (!locked && !seatO && myPiece === '') ? 'inline-block' : 'none';
+            document.getElementById('stand-btn').style.display = (!locked && (myPiece === 'X' || myPiece === 'O')) ? 'inline-block' : 'none';
+        }}
+
+        function sit(piece) {{
+            socket.emit('sit', {{ room: currentRoom, piece: piece }});
+        }}
+
+        function stand() {{
+            socket.emit('stand', {{ room: currentRoom }});
+        }}
 
         function makeMove(r, c) {{
             if (!isMyTurn || myPiece === '') return;
@@ -389,6 +459,7 @@ HTML_PAGE = f"""
         }}
 
         function updateTurn(turn) {{
+            currentTurn = turn;
             document.getElementById('info').style.color = "#555";
             if (myPiece === '' || (myPiece !== 'X' && myPiece !== 'O')) {{
                 document.getElementById('info').innerText = `Đang xem: Lượt của ${{turn}}`;
@@ -638,6 +709,7 @@ def countdown_worker(room_id):
     r_data['win_cells'] = None
     r_data['threat_cells'] = []
     r_data['game_over'] = False
+    r_data['game_active'] = False
     r_data['countdown_seconds'] = 0
     
     socketio.emit('update', {
@@ -645,7 +717,8 @@ def countdown_worker(room_id):
         'turn': 'X',
         'last_move': None,
         'win_cells': None,
-        'threat_cells': []
+        'threat_cells': [],
+        'game_active': False
     }, to=room_id)
 
 def handle_join(data):
@@ -661,6 +734,7 @@ def handle_join(data):
             'last_move': None,
             'win_cells': None,
             'threat_cells': [],
+            'game_active': False,
             'game_over': False,
             'countdown_seconds': 0,
             'chat_history': [],
@@ -671,25 +745,13 @@ def handle_join(data):
     client_ip = request.remote_addr
     player_name = resolve_player_name(client_ip)
 
-    ip_has_slot = any(p.get('ip') == client_ip and p['piece'] in ('X', 'O') for p in r_data['players'].values())
-
     piece = ''
-    if not ip_has_slot or ALLOW_SAME_IP:
-        if 'X' not in [p['piece'] for p in r_data['players'].values()]:
-            piece = 'X'
-        elif 'O' not in [p['piece'] for p in r_data['players'].values()]:
-            piece = 'O'
 
     r_data['players'][request.sid] = {'piece': piece, 'name': player_name, 'ip': client_ip}
 
-    # Compute threats for init: opponent of the new player's piece
-    if piece in ('X', 'O'):
-        threat_cells = detect_threats(r_data['board'])
-        r_data['threat_cells'] = list(threat_cells) if threat_cells else []
-    else:
-        # Spectator: show threats from both players
-        threat_cells = detect_threats(r_data['board'])
-        r_data['threat_cells'] = list(threat_cells) if threat_cells else []
+    # Spectator: show threats from both players
+    threat_cells = detect_threats(r_data['board'])
+    r_data['threat_cells'] = list(threat_cells) if threat_cells else []
 
     emit('init', {
         'board': r_data['board'], 
@@ -700,48 +762,87 @@ def handle_join(data):
         'win_cells': r_data['win_cells'],
         'threat_cells': r_data['threat_cells'],
         'game_over': r_data.get('game_over', False),
+        'game_active': r_data.get('game_active', False),
         'countdown_seconds': r_data.get('countdown_seconds', 0),
         'chat_history': r_data.get('chat_history', [])
     }, to=request.sid)
 
-    player_list = [{'name': p['name'], 'piece': p['piece']} for p in r_data['players'].values()]
-    emit('player_list', {'players': player_list}, to=room_id)
+    player_list = [{'sid': sid, 'name': p['name'], 'piece': p['piece']} for sid, p in r_data['players'].items()]
+    emit('player_list', {'players': player_list, 'game_active': r_data.get('game_active', False)}, to=room_id)
+
+def handle_sit(data):
+    room_id = data.get('room')
+    if room_id not in rooms:
+        return
+    r_data = rooms[room_id]
+    if request.sid not in r_data['players']:
+        return
+    player = r_data['players'][request.sid]
+    piece = data.get('piece')
+    if piece not in ('X', 'O'):
+        return
+    if r_data.get('game_active'):
+        return
+    if player['piece'] != '':
+        return
+    for sid, p in r_data['players'].items():
+        if sid == request.sid:
+            continue
+        if p['piece'] == piece:
+            return
+        if not ALLOW_SAME_IP and p.get('ip') == player.get('ip') and p['piece'] in ('X', 'O'):
+            return
+    player['piece'] = piece
+    player_list = [{'sid': sid, 'name': p['name'], 'piece': p['piece']} for sid, p in r_data['players'].items()]
+    emit('player_list', {'players': player_list, 'game_active': r_data.get('game_active', False)}, to=room_id)
+    broadcast_room_list()
+
+def handle_stand(data):
+    room_id = data.get('room')
+    if room_id not in rooms:
+        return
+    r_data = rooms[room_id]
+    if request.sid not in r_data['players']:
+        return
+    player = r_data['players'][request.sid]
+    if r_data.get('game_active'):
+        return
+    if player['piece'] not in ('X', 'O'):
+        return
+    player['piece'] = ''
+    player_list = [{'sid': sid, 'name': p['name'], 'piece': p['piece']} for sid, p in r_data['players'].items()]
+    emit('player_list', {'players': player_list, 'game_active': r_data.get('game_active', False)}, to=room_id)
+    broadcast_room_list()
 
 def handle_disconnect():
     if request.sid in user_rooms:
         room_id = user_rooms[request.sid]
         if room_id in rooms and request.sid in rooms[room_id]['players']:
-            piece = rooms[room_id]['players'][request.sid]['piece']
-            del rooms[room_id]['players'][request.sid]
+            r_data = rooms[room_id]
+            piece = r_data['players'][request.sid]['piece']
+            del r_data['players'][request.sid]
 
-            if piece == rooms[room_id]['turn']:
-                r_data = rooms[room_id]
-                active = [p['piece'] for p in r_data['players'].values() if p['piece'] in ('X', 'O')]
-
-                if active:
-                    r_data['turn'] = 'O' if piece == 'X' else 'X'
-                    # Compute threats from both players
-                    threat_cells = detect_threats(r_data['board'])
-                    r_data['threat_cells'] = list(threat_cells) if threat_cells else []
-                else:
-                    r_data['board'] = create_empty_board()
-                    r_data['turn'] = 'X'
-                    r_data['last_move'] = None
-                    r_data['win_cells'] = None
-                    r_data['threat_cells'] = []
-                    r_data['game_over'] = False
-                    r_data['countdown_seconds'] = 0
-                    r_data['chat_history'] = []
-
+            if r_data.get('game_active') and piece in ('X', 'O'):
+                r_data['board'] = create_empty_board()
+                r_data['turn'] = 'X'
+                r_data['last_move'] = None
+                r_data['win_cells'] = None
+                r_data['threat_cells'] = []
+                r_data['game_over'] = False
+                r_data['game_active'] = False
+                r_data['countdown_seconds'] = 0
                 emit('update', {
                     'board': r_data['board'],
                     'turn': r_data['turn'],
                     'last_move': r_data['last_move'],
-                    'threat_cells': r_data['threat_cells']
+                    'win_cells': None,
+                    'threat_cells': [],
+                    'game_active': False
                 }, to=room_id)
 
-            player_list = [{'name': p['name'], 'piece': p['piece']} for p in rooms[room_id]['players'].values()]
-            emit('player_list', {'players': player_list}, to=room_id)
+            player_list = [{'sid': sid, 'name': p['name'], 'piece': p['piece']} for sid, p in r_data['players'].items()]
+            emit('player_list', {'players': player_list, 'game_active': r_data.get('game_active', False)}, to=room_id)
+            broadcast_room_list()
 
         del user_rooms[request.sid]
 
@@ -751,14 +852,20 @@ def handle_move(data):
     
     r_data = rooms[room_id]
     if request.sid not in r_data['players']: return 
+    if r_data.get('game_over'): return 
     
     piece = r_data['players'][request.sid]['piece']
     if piece != r_data['turn']: return 
+    
+    seated = [p['piece'] for p in r_data['players'].values() if p['piece'] in ('X', 'O')]
+    if 'X' not in seated or 'O' not in seated: return 
     
     row, col = data['row'], data['col']
     if r_data['board'][row][col] == '':
         r_data['board'][row][col] = piece
         r_data['last_move'] = {'r': row, 'c': col}
+        if not r_data.get('game_active'):
+            r_data['game_active'] = True
         
         # Kiểm tra thắng, lấy mảng ô win
         win_cells = check_win(r_data['board'], row, col, piece)
@@ -767,13 +874,15 @@ def handle_move(data):
             r_data['win_cells'] = win_cells
             r_data['threat_cells'] = []
             r_data['game_over'] = True
+            r_data['game_active'] = False
             r_data['countdown_seconds'] = COUNTDOWN_SECONDS
             emit('game_over', {
                 'board': r_data['board'], 
                 'winner': piece,
                 'last_move': r_data['last_move'],
                 'win_cells': r_data['win_cells'],
-                'threat_cells': []
+                'threat_cells': [],
+                'game_active': False
             }, to=room_id)
             socketio.start_background_task(countdown_worker, room_id)
             return
@@ -786,7 +895,8 @@ def handle_move(data):
             'board': r_data['board'], 
             'turn': r_data['turn'],
             'last_move': r_data['last_move'],
-            'threat_cells': r_data['threat_cells']
+            'threat_cells': r_data['threat_cells'],
+            'game_active': r_data.get('game_active', False)
         }, to=room_id)
 
 def handle_chat(data):
@@ -815,41 +925,68 @@ def handle_surrender(data):
     r_data = rooms[room_id]
     if request.sid not in r_data['players']:
         return
+    if r_data.get('game_over'):
+        return
     piece = r_data['players'][request.sid]['piece']
     if piece not in ('X', 'O'):
         return
+    surrenderer_name = r_data['players'][request.sid]['name']
     winner = 'O' if piece == 'X' else 'X'
     winner_name = next((p['name'] for p in r_data['players'].values() if p['piece'] == winner), winner)
     r_data['win_cells'] = None
     r_data['threat_cells'] = []
     r_data['game_over'] = True
+    r_data['game_active'] = False
     r_data['countdown_seconds'] = COUNTDOWN_SECONDS
     emit('game_over', {
         'board': r_data['board'],
         'winner': winner,
         'winner_name': winner_name,
+        'surrenderer_name': surrenderer_name,
         'surrender': True,
         'last_move': r_data['last_move'],
         'win_cells': None,
-        'threat_cells': []
+        'threat_cells': [],
+        'game_active': False
     }, to=room_id)
     socketio.start_background_task(countdown_worker, room_id)
 
 def handle_reset(data):
     room_id = data.get('room')
-    if room_id in rooms:
-        rooms[room_id]['board'] = create_empty_board()
-        rooms[room_id]['turn'] = 'X'
-        rooms[room_id]['last_move'] = None 
-        rooms[room_id]['win_cells'] = None # Xóa trạng thái bàn thắng
-        rooms[room_id]['threat_cells'] = []
-        emit('update', {
-            'board': rooms[room_id]['board'], 
-            'turn': 'X',
-            'last_move': None,
-            'win_cells': None,
-            'threat_cells': []
-        }, to=room_id)
+    if room_id not in rooms:
+        return
+    if request.sid not in rooms[room_id]['players']:
+        return
+    if not rooms[room_id].get('game_over'):
+        return
+    rooms[room_id]['board'] = create_empty_board()
+    rooms[room_id]['turn'] = 'X'
+    rooms[room_id]['last_move'] = None 
+    rooms[room_id]['win_cells'] = None # Xóa trạng thái bàn thắng
+    rooms[room_id]['threat_cells'] = []
+    rooms[room_id]['game_over'] = False
+    rooms[room_id]['game_active'] = False
+    emit('update', {
+        'board': rooms[room_id]['board'], 
+        'turn': 'X',
+        'last_move': None,
+        'win_cells': None,
+        'threat_cells': [],
+        'game_active': False
+    }, to=room_id)
+
+def get_rooms_summary():
+    summary = []
+    for name, r in rooms.items():
+        seated = sum(1 for p in r['players'].values() if p['piece'] in ('X', 'O'))
+        summary.append({'room': name, 'seated': seated})
+    return summary
+
+def broadcast_room_list():
+    socketio.emit('room_list', {'rooms': get_rooms_summary()})
+
+def handle_get_rooms(data=None):
+    emit('room_list', {'rooms': get_rooms_summary()}, to=request.sid)
 
 def caro_index():
     return HTML_PAGE
@@ -859,8 +996,11 @@ def register(app, socketio_instance):
     socketio = socketio_instance
     app.add_url_rule('/caro', 'caro_index', caro_index, methods=['GET'])
     socketio_instance.on_event('join', handle_join)
+    socketio_instance.on_event('sit', handle_sit)
+    socketio_instance.on_event('stand', handle_stand)
     socketio_instance.on_event('disconnect', handle_disconnect)
     socketio_instance.on_event('move', handle_move)
     socketio_instance.on_event('chat', handle_chat)
     socketio_instance.on_event('surrender', handle_surrender)
     socketio_instance.on_event('reset', handle_reset)
+    socketio_instance.on_event('get_rooms', handle_get_rooms)

@@ -4,6 +4,36 @@ Nhật ký thay đổi theo version. PM agent ghi vào đây khi release.
 
 ---
 
+## [v2.4] - 2026-08-18
+
+### Added
+- **Ghế ngồi & đứng lên (seat management)**: bỏ auto-gán quân khi vào phòng — người chơi mặc định ở trạng thái Đứng (khán giả), tự chọn ngồi ghế X/O qua event `sit`/`stand`. Cờ `game_active` khoá ghế khi đang đánh, mở khoá khi ván kết thúc (tới hết auto-reset). Chỉ cho đánh khi đủ 2 người ngồi; đóng tab giữa ván → huỷ ván (không tính thắng). UI hiện 2 ghế (tên người ngồi hoặc "Trống") + nút Ngồi/Đứng.
+- **Trạng thái phòng ở Lobby**: lobby render động, hiển thị real-time 3 trạng thái mỗi phòng (`Trống`/`Đang đợi`/`Đầy`) theo số ghế có người ngồi; event `get_rooms` lấy snapshot + broadcast `room_list` khi số người ngồi thay đổi.
+
+### Fixed
+- **Guard trạng thái SocketIO handlers**: `handle_reset` chỉ người trong phòng được dùng và chỉ khi `game_over` (không xoá bàn giữa ván); `handle_move`/`handle_surrender` thêm guard `game_over` chống spam trong countdown.
+- **Đầu hàng hiển thị đúng người**: payload `game_over` thêm `surrenderer_name`; frontend hiển thị "[người đầu hàng] đã đầu hàng — [người thắng] (piece) THẮNG!" thay vì nhầm người thắng là người đầu hàng.
+- **Fix dispatch `get_rooms`**: handler nhận tham số mặc định (`data=None`) + frontend emit `{}` → lobby load được ngay khi mở trang.
+
+### Changed
+- `VERSION` = "v2.4"
+- Kiểm thử: regression 13/13 PASS + 10/10 luồng mock (seat/sit/stand/move/surrender/reset/disconnect/get_rooms).
+
+---
+
+## [v2.3.1] - 2026-08-17
+
+### Fixed
+- **Regression luật thắng**: sửa lại `check_win` — v2.3 đã lỡ bỏ hẳn điều kiện chặn, khiến chuỗi 5 quân bị đối thủ chặn 2 đầu (`O X X X X X O`) vẫn thắng. Luật đúng: thắng khi đúng 5 quân liên tiếp + số đầu bị **quân đối thủ** chặn < 2; biên bàn cờ và ô trống KHÔNG tính là chặn.
+- **Threat detection Simple Four**: `O X X X X _ O` không còn bị đánh dấu "đường nguy hiểm" (lấp đầu hở → 5 quân bị đối thủ chặn 2 đầu → không thắng).
+- Giữ nguyên các fix đúng của v2.3: biên không chặn (`X X X X X O` thắng, `X X X X _ O` vẫn là threat) và overline (6+ không thắng).
+
+### Changed
+- `VERSION` = "v2.3.1"
+- Bổ sung test `W5`, `T7`, `T8`; sửa kỳ vọng `W2` (13/13 PASS)
+
+---
+
 ## [v2.3] - 2026-08-16
 
 ### Fixed
