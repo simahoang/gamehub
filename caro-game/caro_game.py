@@ -1,6 +1,7 @@
 import socket
 import json
 import os
+import time
 from flask import request
 from flask_socketio import emit, join_room, leave_room
 
@@ -9,8 +10,10 @@ socketio = None
 
 # --- TRẠNG THÁI GAME ---
 BOARD_SIZE = 20 # BẠN CÓ THỂ ĐỔI THÀNH SỐ BẤT KỲ (15, 20, 25...)
-VERSION = "v2.4"
+VERSION = "v2.5"
 COUNTDOWN_SECONDS = 8
+IDLE_SECONDS = 180
+IDLE_CHECK_INTERVAL = 10
 
 # --- CONFIG ---
 # Bật (True) để cho phép cùng 1 IP cầm cả X và O (dùng khi self-test).
@@ -261,6 +264,14 @@ HTML_PAGE = f"""
         let currentRoom = '';
         let threatEnabled = true;
         let lastBoardState = null;
+
+        function escapeHtml(str) {{
+            return (str || '').replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }}
         
         socket.on('connect', () => {{ socket.emit('get_rooms', {{}}); }});
         socket.on('room_list', (data) => {{ renderRoomList(data.rooms); }});
@@ -322,7 +333,7 @@ HTML_PAGE = f"""
                 data.chat_history.forEach(m => {{
                     const div = document.createElement('div');
                     div.className = 'chat-msg';
-                    div.innerHTML = '<span class="chat-name">' + m.name + ':</span> ' + m.message;
+                    div.innerHTML = '<span class="chat-name">' + escapeHtml(m.name) + ':</span> ' + escapeHtml(m.message);
                     chatContainer.appendChild(div);
                 }});
                 chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -365,6 +376,12 @@ HTML_PAGE = f"""
             }}
         }});
 
+        socket.on('notice', (data) => {{
+            const info = document.getElementById('info');
+            info.innerText = data.message;
+            info.style.color = '#e67e22';
+        }});
+
         socket.on('player_list', (data) => {{
             if (data.game_active !== undefined) gameActive = !!data.game_active;
             const players = data.players;
@@ -382,7 +399,7 @@ HTML_PAGE = f"""
                 if (p.piece === 'X') pieceLabel = ' <span class="piece-x">[X]</span>';
                 else if (p.piece === 'O') pieceLabel = ' <span class="piece-o">[O]</span>';
                 else pieceLabel = ' <span class="piece-spec">[Khán giả]</span>';
-                div.innerHTML = p.name + pieceLabel;
+                div.innerHTML = escapeHtml(p.name) + pieceLabel;
                 container.appendChild(div);
             }});
             updateSeatPanel(players);
@@ -501,7 +518,7 @@ function sendChat() {{
             const container = document.getElementById('chat-messages');
             const div = document.createElement('div');
             div.className = 'chat-msg';
-            div.innerHTML = '<span class="chat-name">' + data.name + ':</span> ' + data.message;
+            div.innerHTML = '<span class="chat-name">' + escapeHtml(data.name) + ':</span> ' + escapeHtml(data.message);
             container.appendChild(div);
             container.scrollTop = container.scrollHeight;
             while (container.children.length > 50) {{
@@ -721,6 +738,24 @@ def countdown_worker(room_id):
         'game_active': False
     }, to=room_id)
 
+def idle_sweeper_worker():
+    global socketio
+    while True:
+        socketio.sleep(IDLE_CHECK_INTERVAL)
+        now = time.time()
+        for room_id, r_data in rooms.items():
+            if r_data.get('game_active') or r_data.get('game_over'):
+                continue
+            for sid in list(r_data['players'].keys()):
+                p = r_data['players'][sid]
+                if p.get('piece') in ('X', 'O') and now - p.get('last_active', now) > IDLE_SECONDS:
+                    name = p.get('name', '')
+                    p['piece'] = ''
+                    player_list = [{'sid': s, 'name': pl['name'], 'piece': pl['piece']} for s, pl in r_data['players'].items()]
+                    socketio.emit('player_list', {'players': player_list, 'game_active': r_data.get('game_active', False)}, to=room_id)
+                    socketio.emit('notice', {'message': name + ' đã tự động đứng lên do không hoạt động'}, to=room_id)
+                    broadcast_room_list()
+
 def handle_join(data):
     room_id = data['room']
     join_room(room_id)
@@ -747,7 +782,7 @@ def handle_join(data):
 
     piece = ''
 
-    r_data['players'][request.sid] = {'piece': piece, 'name': player_name, 'ip': client_ip}
+    r_data['players'][request.sid] = {'piece': piece, 'name': player_name, 'ip': client_ip, 'last_active': time.time()}
 
     # Spectator: show threats from both players
     threat_cells = detect_threats(r_data['board'])
@@ -792,6 +827,7 @@ def handle_sit(data):
             return
         if not ALLOW_SAME_IP and p.get('ip') == player.get('ip') and p['piece'] in ('X', 'O'):
             return
+    player['last_active'] = time.time()
     player['piece'] = piece
     player_list = [{'sid': sid, 'name': p['name'], 'piece': p['piece']} for sid, p in r_data['players'].items()]
     emit('player_list', {'players': player_list, 'game_active': r_data.get('game_active', False)}, to=room_id)
@@ -809,6 +845,7 @@ def handle_stand(data):
         return
     if player['piece'] not in ('X', 'O'):
         return
+    player['last_active'] = time.time()
     player['piece'] = ''
     player_list = [{'sid': sid, 'name': p['name'], 'piece': p['piece']} for sid, p in r_data['players'].items()]
     emit('player_list', {'players': player_list, 'game_active': r_data.get('game_active', False)}, to=room_id)
@@ -860,6 +897,7 @@ def handle_move(data):
     seated = [p['piece'] for p in r_data['players'].values() if p['piece'] in ('X', 'O')]
     if 'X' not in seated or 'O' not in seated: return 
     
+    r_data['players'][request.sid]['last_active'] = time.time()
     row, col = data['row'], data['col']
     if r_data['board'][row][col] == '':
         r_data['board'][row][col] = piece
@@ -908,8 +946,10 @@ def handle_chat(data):
         return
     player_name = r_data['players'][request.sid]['name']
     message = data.get('message', '').strip()
+    message = message[:200]
     if not message:
         return
+    r_data['players'][request.sid]['last_active'] = time.time()
     emit('chat', {'name': player_name, 'message': message}, to=room_id)
 
     if 'chat_history' not in r_data:
@@ -994,6 +1034,7 @@ def caro_index():
 def register(app, socketio_instance):
     global socketio
     socketio = socketio_instance
+    socketio_instance.start_background_task(idle_sweeper_worker)
     app.add_url_rule('/caro', 'caro_index', caro_index, methods=['GET'])
     socketio_instance.on_event('join', handle_join)
     socketio_instance.on_event('sit', handle_sit)

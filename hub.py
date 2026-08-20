@@ -14,7 +14,7 @@ import caro_game
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'hub-secret'
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins=[])
 
 HUB_HTML = """
 <!DOCTYPE html>
@@ -90,8 +90,11 @@ def index():
 def set_username():
     username = request.form.get('username', '').strip()
     ip = request.remote_addr
+    players = load_players()
+    if ip in players:
+        return redirect('/')
+    username = username[:30]
     if username and ip:
-        players = load_players()
         import datetime
         players[ip] = {"name": username, "created_at": datetime.datetime.now().isoformat()}
         with open(PLAYERS_FILE, 'w', encoding='utf-8') as f:

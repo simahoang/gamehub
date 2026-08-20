@@ -4,6 +4,24 @@ Nhật ký thay đổi theo version. PM agent ghi vào đây khi release.
 
 ---
 
+## [v2.5] - 2026-08-20
+
+### Fixed
+- **Stored XSS (High)**: escape tên người chơi và tin nhắn chat (helper `escapeHtml`) ở chat history, chat realtime, player list; server giới hạn message 200 ký tự.
+- **Test infra**: `tests/test_fix.py` dùng đường dẫn tương đối (trước đây hardcode thư mục cũ → test nhầm bản v2.3.1).
+
+### Added
+- **Tự động nhả ghế khi ngồi lì (pre-game idle timeout)**: `IDLE_SECONDS=180`, player theo dõi `last_active`; sweeper định kỳ tự `stand` người ngồi không hoạt động khi ván chưa bắt đầu + thông báo `notice`.
+
+### Changed
+- `VERSION` = "v2.5"
+
+### Security (hub.py — Hub v1.1, cùng release)
+- `POST /set_username`: guard chỉ cho đăng ký lần đầu (`if ip in players: redirect`) + giới hạn 30 ký tự.
+- `cors_allowed_origins=[]` (bỏ `"*"`).
+
+---
+
 ## [v2.4] - 2026-08-18
 
 ### Added
