@@ -10,7 +10,7 @@ socketio = None
 
 # --- TRẠNG THÁI GAME ---
 BOARD_SIZE = 20 # BẠN CÓ THỂ ĐỔI THÀNH SỐ BẤT KỲ (15, 20, 25...)
-VERSION = "v3.1.10"
+VERSION = "v3.1.11"
 COUNTDOWN_SECONDS = 8
 IDLE_SECONDS = 180
 IDLE_CHECK_INTERVAL = 10
@@ -66,7 +66,6 @@ HTML_PAGE = f"""
     <!-- Tailwind CSS + DaisyUI CDN -->
     <!-- Nếu máy LAN không có Internet, host local: tải tailwindcss và daisyui về thư mục static/ -->
     <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css" rel="stylesheet" type="text/css" />
-    <script src="https://cdn.tailwindcss.com"></script>
     <style>
         #board {{
             display: grid;
@@ -472,30 +471,41 @@ HTML_PAGE = f"""
             const prevThreat = lastBoardState ? (lastBoardState.threatCells || []) : [];
             const prevWin = lastBoardState ? (lastBoardState.winCells || []) : [];
             const prevLastMove = lastBoardState ? lastBoardState.lastMove : null;
+            const prevBoard = lastBoardState ? lastBoardState.board : null;
             lastBoardState = {{ board: boardData, lastMove: lastMove, winCells: winCells, threatCells: threatCells }};
 
-            // Cập nhật innerText + className cho các ô thay đổi (so với DOM hiện tại)
-            for (let r = 0; r < size; r++) {{
-                for (let c = 0; c < size; c++) {{
-                    const newVal = boardData[r][c];
-                    const cell = cells[r][c];
-                    if (cell.innerText !== newVal) {{
-                        cell.innerText = newVal;
-                        cell.className = 'cell ' + newVal;
+            // Lần đầu: render toàn bộ
+            if (!prevBoard) {{
+                for (let r = 0; r < size; r++) {{
+                    for (let c = 0; c < size; c++) {{
+                        const v = boardData[r][c];
+                        const cell = cells[r][c];
+                        cell.innerText = v;
+                        cell.className = 'cell ' + v;
+                    }}
+                }}
+            }} else {{
+                // Chỉ update các ô thay đổi giữa board cũ và mới
+                for (let r = 0; r < size; r++) {{
+                    for (let c = 0; c < size; c++) {{
+                        if (boardData[r][c] !== prevBoard[r][c]) {{
+                            const v = boardData[r][c];
+                            const cell = cells[r][c];
+                            cell.innerText = v;
+                            cell.className = 'cell ' + v;
+                        }}
                     }}
                 }}
             }}
 
             // Xoá last-move ở ô cũ (nếu có)
             if (prevLastMove && (!lastMove || prevLastMove.r !== lastMove.r || prevLastMove.c !== lastMove.c)) {{
-                const cell = cells[prevLastMove.r][prevLastMove.c];
-                if (cell) cell.classList.remove('last-move');
+                cells[prevLastMove.r][prevLastMove.c].classList.remove('last-move');
             }}
 
             // Thêm last-move ở ô mới (nếu có)
             if (lastMove) {{
-                const cell = cells[lastMove.r][lastMove.c];
-                if (cell) cell.classList.add('last-move');
+                cells[lastMove.r][lastMove.c].classList.add('last-move');
             }}
 
             // Cập nhật threat cells: thêm class mới, xoá class cũ
@@ -504,13 +514,12 @@ HTML_PAGE = f"""
             (threatCells || []).forEach(pt => {{
                 if (!prevThreatSet.has(pt[0] + ',' + pt[1])) {{
                     const cell = cells[pt[0]][pt[1]];
-                    if (cell && !cell.classList.contains('threat-cell')) cell.classList.add('threat-cell');
+                    if (!cell.classList.contains('threat-cell')) cell.classList.add('threat-cell');
                 }}
             }});
             prevThreat.forEach(pt => {{
                 if (!threatSet.has(pt[0] + ',' + pt[1])) {{
-                    const cell = cells[pt[0]][pt[1]];
-                    if (cell) cell.classList.remove('threat-cell');
+                    cells[pt[0]][pt[1]].classList.remove('threat-cell');
                 }}
             }});
 
@@ -520,13 +529,12 @@ HTML_PAGE = f"""
             (winCells || []).forEach(pt => {{
                 if (!prevWinSet.has(pt[0] + ',' + pt[1])) {{
                     const cell = cells[pt[0]][pt[1]];
-                    if (cell) cell.classList.add('win-cell');
+                    if (!cell.classList.contains('win-cell')) cell.classList.add('win-cell');
                 }}
             }});
             prevWin.forEach(pt => {{
                 if (!winSet.has(pt[0] + ',' + pt[1])) {{
-                    const cell = cells[pt[0]][pt[1]];
-                    if (cell) cell.classList.remove('win-cell');
+                    cells[pt[0]][pt[1]].classList.remove('win-cell');
                 }}
             }});
         }}
