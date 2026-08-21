@@ -10,24 +10,25 @@ socketio = None
 
 # --- TRẠNG THÁI GAME ---
 BOARD_SIZE = 20 # BẠN CÓ THỂ ĐỔI THÀNH SỐ BẤT KỲ (15, 20, 25...)
-VERSION = "v2.5"
+VERSION = "v2.6"
 COUNTDOWN_SECONDS = 8
 IDLE_SECONDS = 180
 IDLE_CHECK_INTERVAL = 10
+TURN_SECONDS = 40
 
 # --- CONFIG ---
 # Bật (True) để cho phép cùng 1 IP cầm cả X và O (dùng khi self-test).
 # Tắt (False) để chặn trùng IP như bình thường.
-ALLOW_SAME_IP = False
+ALLOW_SAME_IP = True
 
 def create_empty_board():
     return [['' for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
 
 # Mở sẵn 3 phòng cố định (Thêm trường win_cells để lưu chuỗi ô chiến thắng)
 rooms = {
-    'Phòng 1': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': []},
-    'Phòng 2': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': []},
-    'Phòng 3': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': []},
+    'Phòng 1': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None},
+    'Phòng 2': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None},
+    'Phòng 3': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None},
 }       
 user_rooms = {}
 
@@ -64,6 +65,8 @@ HTML_PAGE = f"""
         h1 {{ color: #333; margin-bottom: 5px; }}
         #info {{ font-size: 18px; font-weight: bold; margin-bottom: 15px; color: #555; }}
         #role {{ font-size: 16px; color: #888; margin-bottom: 20px; }}
+        #result {{ font-size: 20px; font-weight: bold; margin-bottom: 10px; color: green; }}
+        #turn-timer {{ font-size: 18px; font-weight: bold; margin-bottom: 10px; color: #555; display: none; }}
         #seat-panel {{ display: flex; flex-direction: column; gap: 6px; margin: 5px auto 15px auto; max-width: 400px; }}
         .seat-row {{ display: flex; justify-content: center; align-items: center; gap: 10px; }}
         .seat-label {{ font-weight: bold; color: #444; }}
@@ -217,6 +220,8 @@ HTML_PAGE = f"""
     <div id="game">
         <h2 id="roomTitle" style="color: #d9534f; margin-top: 0;"></h2>
         <div id="info">Đang kết nối...</div>
+        <div id="result"></div>
+        <div id="turn-timer"></div>
         <div id="role"></div>
         <div id="seat-panel">
             <div class="seat-row">
@@ -237,7 +242,6 @@ HTML_PAGE = f"""
         <div class="game-controls">
             <button id="surrender-btn" onclick="surrender()" style="display: none;">🏳️ Đầu Hàng</button>
             <button class="btn-gray" onclick="leaveRoom()">🚪 Rời Phòng</button>
-            <button id="threat-toggle" onclick="toggleThreat()">⚠️ Cảnh báo: BẬT</button>
         </div>
     </div>
 
@@ -262,8 +266,8 @@ HTML_PAGE = f"""
         let gameActive = false;
         let currentTurn = 'X';
         let currentRoom = '';
-        let threatEnabled = true;
         let lastBoardState = null;
+        let turnTimerSeconds = 0;
 
         function escapeHtml(str) {{
             return (str || '').replace(/&/g, '&amp;')
@@ -322,6 +326,8 @@ HTML_PAGE = f"""
         }}
 
         socket.on('init', (data) => {{
+            resetTurnTimer();
+            document.getElementById('result').innerText = '';
             myPiece = data.piece;
             gameActive = !!data.game_active;
             myName = data.player_name || 'Unknown';
@@ -350,29 +356,48 @@ HTML_PAGE = f"""
 
         socket.on('update', (data) => {{
             if (data.game_active !== undefined) gameActive = !!data.game_active;
+            resetTurnTimer();
+            document.getElementById('result').innerText = '';
             updateBoard(data.board, data.last_move, null, data.threat_cells);
             updateTurn(data.turn);
         }});
 
         socket.on('game_over', (data) => {{
             if (data.game_active !== undefined) gameActive = !!data.game_active;
+            resetTurnTimer();
             updateBoard(data.board, data.last_move, data.win_cells, data.threat_cells);
             let msg;
-            if (data.surrender) {{
+            if (data.timeout) {{
+                msg = data.timeout_name + ' hết giờ — ' + data.winner_name + ' (' + data.winner + ') THẮNG!';
+            }} else if (data.surrender) {{
                 msg = data.surrenderer_name + ' đã đầu hàng — ' + data.winner_name + ' (' + data.winner + ') THẮNG!';
             }} else {{
-                msg = data.winner + ' ĐÃ CHIẾN THẮNG!';
+                msg = data.winner_name + ' (' + data.winner + ') THẮNG!';
             }}
-            document.getElementById('info').innerText = msg;
-            document.getElementById('info').style.color = "green";
+            const result = document.getElementById('result');
+            result.innerText = msg;
+            result.style.color = "green";
             isMyTurn = false;
         }});
 
         socket.on('countdown', (data) => {{
+            resetTurnTimer();
             const info = document.getElementById('info');
             if (data.seconds > 0) {{
                 info.innerText = 'Ván mới sau ' + data.seconds + 's...';
                 info.style.color = '#e67e22';
+            }}
+        }});
+
+        socket.on('turn_timer', (data) => {{
+            const t = document.getElementById('turn-timer');
+            if (data.seconds > 0) {{
+                turnTimerSeconds = data.seconds;
+                t.style.display = 'inline-block';
+                t.innerText = '⏱ còn ' + data.seconds + 's';
+                t.style.color = data.seconds <= 10 ? 'red' : '#555';
+            }} else {{
+                resetTurnTimer();
             }}
         }});
 
@@ -406,6 +431,14 @@ HTML_PAGE = f"""
             updateRole();
             updateTurn(currentTurn);
         }});
+
+        function resetTurnTimer() {{
+            turnTimerSeconds = 0;
+            const t = document.getElementById('turn-timer');
+            t.innerText = '';
+            t.style.color = '';
+            t.style.display = 'none';
+        }}
 
         function updateRole() {{
             const surBtn = document.getElementById('surrender-btn');
@@ -466,7 +499,7 @@ HTML_PAGE = f"""
                     }}
 
                     // Kiểm tra nếu ô này nằm trong threat cells
-                    if (threatEnabled && threatCells && threatCells.some(pt => pt[0] === r && pt[1] === c)) {{
+                    if (threatCells && threatCells.some(pt => pt[0] === r && pt[1] === c)) {{
                         className += ' threat-cell';
                     }}
                     
@@ -490,17 +523,7 @@ HTML_PAGE = f"""
             }}
         }}
 
-        function toggleThreat() {{
-            threatEnabled = !threatEnabled;
-            const btn = document.getElementById('threat-toggle');
-            btn.innerText = threatEnabled ? '⚠️ Cảnh báo: BẬT' : '⚠️ Cảnh báo: TẮT';
-            btn.className = threatEnabled ? '' : 'btn-gray';
-            if (lastBoardState) {{
-                updateBoard(lastBoardState.board, lastBoardState.lastMove, lastBoardState.winCells, lastBoardState.threatCells);
-            }}
-        }}
-
-function sendChat() {{
+        function sendChat() {{
             const input = document.getElementById('chat-input');
             const msg = input.value.trim();
             if (!msg) return;
@@ -756,6 +779,43 @@ def idle_sweeper_worker():
                     socketio.emit('notice', {'message': name + ' đã tự động đứng lên do không hoạt động'}, to=room_id)
                     broadcast_room_list()
 
+def start_turn_clock(room_id):
+    global socketio
+    if socketio is None or room_id not in rooms:
+        return
+    r_data = rooms[room_id]
+    r_data['turn_deadline'] = time.time() + TURN_SECONDS
+    socketio.start_background_task(turn_clock_worker, room_id, r_data['turn'])
+
+def turn_clock_worker(room_id, piece):
+    global socketio
+    if socketio is None or room_id not in rooms: return
+    r_data = rooms[room_id]
+    while True:
+        if not r_data.get('game_active') or r_data.get('game_over') or r_data['turn'] != piece:
+            return
+        deadline = r_data.get('turn_deadline')
+        remaining = int(deadline - time.time()) if deadline else 0
+        if remaining <= 0:
+            # hết giờ -> người đang tới lượt (piece) thua, đối thủ thắng
+            winner = 'O' if piece == 'X' else 'X'
+            winner_name = next((p['name'] for p in r_data['players'].values() if p['piece'] == winner), winner)
+            loser_name = next((p['name'] for p in r_data['players'].values() if p['piece'] == piece), piece)
+            r_data['win_cells'] = None
+            r_data['threat_cells'] = []
+            r_data['game_over'] = True
+            r_data['game_active'] = False
+            r_data['countdown_seconds'] = COUNTDOWN_SECONDS
+            socketio.emit('game_over', {
+                'board': r_data['board'], 'winner': winner, 'winner_name': winner_name,
+                'surrender': False, 'timeout': True, 'timeout_name': loser_name,
+                'last_move': r_data['last_move'], 'win_cells': None, 'threat_cells': [], 'game_active': False
+            }, to=room_id)
+            socketio.start_background_task(countdown_worker, room_id)
+            return
+        socketio.emit('turn_timer', {'seconds': remaining}, to=room_id)
+        socketio.sleep(1)
+
 def handle_join(data):
     room_id = data['room']
     join_room(room_id)
@@ -773,6 +833,7 @@ def handle_join(data):
             'game_over': False,
             'countdown_seconds': 0,
             'chat_history': [],
+            'turn_deadline': None,
         }
 
     r_data = rooms[room_id]
@@ -859,6 +920,17 @@ def handle_disconnect():
             piece = r_data['players'][request.sid]['piece']
             del r_data['players'][request.sid]
 
+            if not r_data['players']:
+                r_data['chat_history'] = []
+                r_data['board'] = create_empty_board()
+                r_data['turn'] = 'X'
+                r_data['last_move'] = None
+                r_data['win_cells'] = None
+                r_data['threat_cells'] = []
+                r_data['game_over'] = False
+                r_data['game_active'] = False
+                r_data['countdown_seconds'] = 0
+
             if r_data.get('game_active') and piece in ('X', 'O'):
                 r_data['board'] = create_empty_board()
                 r_data['turn'] = 'X'
@@ -914,9 +986,11 @@ def handle_move(data):
             r_data['game_over'] = True
             r_data['game_active'] = False
             r_data['countdown_seconds'] = COUNTDOWN_SECONDS
+            winner_name = next((p['name'] for p in r_data['players'].values() if p['piece'] == piece), piece)
             emit('game_over', {
                 'board': r_data['board'], 
                 'winner': piece,
+                'winner_name': winner_name,
                 'last_move': r_data['last_move'],
                 'win_cells': r_data['win_cells'],
                 'threat_cells': [],
@@ -936,6 +1010,7 @@ def handle_move(data):
             'threat_cells': r_data['threat_cells'],
             'game_active': r_data.get('game_active', False)
         }, to=room_id)
+        start_turn_clock(room_id)
 
 def handle_chat(data):
     room_id = data.get('room')
@@ -949,6 +1024,9 @@ def handle_chat(data):
     message = message[:200]
     if not message:
         return
+    if time.time() - r_data['players'][request.sid].get('last_chat_time', 0) < 1.0:
+        return
+    r_data['players'][request.sid]['last_chat_time'] = time.time()
     r_data['players'][request.sid]['last_active'] = time.time()
     emit('chat', {'name': player_name, 'message': message}, to=room_id)
 
