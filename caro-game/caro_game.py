@@ -10,7 +10,7 @@ socketio = None
 
 # --- TRẠNG THÁI GAME ---
 BOARD_SIZE = 20 # BẠN CÓ THỂ ĐỔI THÀNH SỐ BẤT KỲ (15, 20, 25...)
-VERSION = "v3.0.2"
+VERSION = "v3.1.9"
 COUNTDOWN_SECONDS = 8
 IDLE_SECONDS = 180
 IDLE_CHECK_INTERVAL = 10
@@ -26,12 +26,12 @@ def create_empty_board():
 
 # Mở sẵn 6 phòng cố định với thời gian mỗi nước khác nhau (turn_seconds)
 rooms = {
-    'Tiêu chuẩn 1':  {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 45},
-    'Tiêu chuẩn 2': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 45},
-    'Tiêu chuẩn 3':   {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 45},
-    'Siêu nhanh':  {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 15},
-    'Không suy nghĩ':  {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 5},
-    'Siêu chậm':  {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 180},
+    'Tiêu chuẩn 1':  {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 45, 'move_history': []},
+    'Tiêu chuẩn 2': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 45, 'move_history': []},
+    'Tiêu chuẩn 3':   {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 45, 'move_history': []},
+    'Siêu nhanh':  {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 15, 'move_history': []},
+    'Không suy nghĩ':  {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 5, 'move_history': []},
+    'Siêu chậm':  {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 180, 'move_history': []},
 }       
 user_rooms = {}
 
@@ -89,8 +89,8 @@ HTML_PAGE = f"""
             transition: background 0.2s;
         }}
         .cell:hover {{ background: oklch(var(--wa) / 0.5); }}
-        .X {{ color: oklch(var(--er)); }}
-        .O {{ color: oklch(var(--p)); }}
+        .X {{ color: #e74c3c !important; }}
+        .O {{ color: #3498db !important; }}
         .last-move {{
             background: oklch(var(--su) / 0.4) !important;
             box-shadow: inset 0 0 8px rgba(0,0,0,0.4);
@@ -159,7 +159,7 @@ HTML_PAGE = f"""
                         <span id="seat-o-name">Trống</span>
                         <button id="sit-o-btn" onclick="sit('O')" style="display:none;" class="btn btn-sm">Ngồi O</button>
                         <button id="stand-btn" onclick="stand()" style="display:none;" class="btn btn-sm btn-ghost">Đứng lên</button>
-                    </div>
+</div>
                 </div>
 
                 <div class="flex justify-center items-center gap-4 my-2 text-base-content/30">
@@ -173,10 +173,22 @@ HTML_PAGE = f"""
                 </div>
 
                 <div class="flex justify-center gap-3 mt-4">
+                    <button id="undo-btn" onclick="requestUndo()" disabled class="btn btn-warning btn-sm">↩ Undo</button>
                     <button id="surrender-btn" onclick="surrender()" style="display: none;" class="btn btn-error">🏳️ Đầu Hàng</button>
                     <button onclick="leaveRoom()" class="btn btn-ghost">🚪 Rời Phòng</button>
+</div>
+
+            <div id="undo-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 hidden">
+                <div class="card bg-base-100 shadow-xl p-6 max-w-sm">
+                    <h3 class="text-lg font-bold mb-4">Yêu cầu Undo</h3>
+                    <p id="undo-modal-msg" class="mb-4"></p>
+                    <div class="flex justify-end gap-3">
+                        <button onclick="document.getElementById('undo-modal').classList.add('hidden')" class="btn btn-ghost btn-sm">Từ chối</button>
+                        <button id="undo-accept-btn" class="btn btn-primary btn-sm">Đồng ý</button>
+                    </div>
                 </div>
             </div>
+        </div>
         </div>
     </div>
 
@@ -299,6 +311,7 @@ HTML_PAGE = f"""
             myName = data.player_name || 'Unknown';
             currentTurn = data.turn;
             updateRole();
+            document.getElementById('undo-btn').disabled = true;
             roomTurnSeconds = data.turn_seconds || 40;
             const ts = roomTurnSeconds;
             document.getElementById('roomTitle').innerText = 'Đang chơi tại: ' + currentRoom + ' (' + ts + 's/nước)';
@@ -453,10 +466,24 @@ HTML_PAGE = f"""
         }}
 
         function updateBoard(boardData, lastMove, winCells, threatCells) {{
-            const prevThreat = lastBoardState.threatCells || [];
-            const prevWin = lastBoardState.winCells || [];
-            const prevLastMove = lastBoardState.lastMove;
+            const prevBoard = lastBoardState ? lastBoardState.board : null;
+            const prevThreat = lastBoardState ? (lastBoardState.threatCells || []) : [];
+            const prevWin = lastBoardState ? (lastBoardState.winCells || []) : [];
+            const prevLastMove = lastBoardState ? lastBoardState.lastMove : null;
             lastBoardState = {{ board: boardData, lastMove: lastMove, winCells: winCells, threatCells: threatCells }};
+
+            // Cập nhật innerText + className cho các ô có nội dung thay đổi
+            for (let r = 0; r < size; r++) {{
+                for (let c = 0; c < size; c++) {{
+                    const newVal = boardData[r][c];
+                    const oldVal = prevBoard ? prevBoard[r][c] : null;
+                    if (newVal !== oldVal) {{
+                        const cell = document.getElementById('cell-' + r + '-' + c);
+                        cell.innerText = newVal;
+                        cell.className = 'cell ' + newVal;
+                    }}
+                }}
+            }}
 
             // Xoá last-move ở ô cũ (nếu có)
             if (prevLastMove && (!lastMove || prevLastMove.r !== lastMove.r || prevLastMove.c !== lastMove.c)) {{
@@ -464,14 +491,10 @@ HTML_PAGE = f"""
                 if (cell) cell.classList.remove('last-move');
             }}
 
-            // Chỉ update ô vừa đánh (nếu có)
+            // Thêm last-move ở ô mới (nếu có)
             if (lastMove) {{
-                const r = lastMove.r, c = lastMove.c;
-                const cell = document.getElementById('cell-' + r + '-' + c);
-                cell.innerText = boardData[r][c];
-                cell.classList.add('last-move');
-                if (winCells && winCells.some(pt => pt[0] === r && pt[1] === c)) cell.classList.add('win-cell');
-                if (threatCells && threatCells.some(pt => pt[0] === r && pt[1] === c)) cell.classList.add('threat-cell');
+                const cell = document.getElementById('cell-' + lastMove.r + '-' + lastMove.c);
+                if (cell) cell.classList.add('last-move');
             }}
 
             // Cập nhật threat cells: thêm class mới, xoá class cũ
@@ -520,6 +543,11 @@ HTML_PAGE = f"""
                 document.getElementById('info').innerText = "Chờ đối thủ đánh...";
                 isMyTurn = false;
             }}
+            const undoBtn = document.getElementById('undo-btn');
+            if (undoBtn) {{
+                const canUndo = gameActive && myPiece && myPiece !== currentTurn && myPiece !== '';
+                undoBtn.disabled = !canUndo;
+            }}
         }}
 
         function sendChat() {{
@@ -535,6 +563,25 @@ HTML_PAGE = f"""
                 socket.emit('surrender', {{ room: currentRoom }});
             }}
         }}
+
+        function requestUndo() {{
+            socket.emit('undo_request', {{ room: currentRoom }});
+        }}
+
+        socket.on('undo_request', (data) => {{
+            // Chỉ hiện popup nếu mình không phải người gửi và mình có piece X/O
+            if (data.from_sid === socket.id) return;
+            if (myPiece !== 'X' && myPiece !== 'O') return;
+            
+            // Dùng modal HTML thay vì confirm() để tránh bị browser chặn
+            const modal = document.getElementById('undo-modal');
+            document.getElementById('undo-modal-msg').innerText = data.from + ' (' + data.from_piece + ') xin đi lại nước vừa đánh. Đồng ý?';
+            document.getElementById('undo-accept-btn').onclick = function() {{
+                socket.emit('undo_accept', {{ room: currentRoom }});
+                modal.classList.add('hidden');
+            }};
+            modal.classList.remove('hidden');
+        }});
 
         socket.on('chat', (data) => {{
             const container = document.getElementById('chat-messages');
@@ -780,6 +827,7 @@ def countdown_worker(room_id):
     r_data['game_over'] = False
     r_data['game_active'] = False
     r_data['countdown_seconds'] = 0
+    r_data['move_history'] = []
     
     socketio.emit('update', {
         'board': r_data['board'],
@@ -865,6 +913,7 @@ def handle_join(data):
             'chat_history': [],
             'turn_deadline': None,
             'turn_seconds': TURN_SECONDS,
+            'move_history': [],
         }
 
     r_data = rooms[room_id]
@@ -970,6 +1019,7 @@ def handle_disconnect():
                 r_data['game_over'] = False
                 r_data['game_active'] = False
                 r_data['countdown_seconds'] = 0
+                r_data['move_history'] = []
 
             if r_data.get('game_active') and piece in ('X', 'O'):
                 r_data['board'] = create_empty_board()
@@ -980,6 +1030,7 @@ def handle_disconnect():
                 r_data['game_over'] = False
                 r_data['game_active'] = False
                 r_data['countdown_seconds'] = 0
+                r_data['move_history'] = []
                 emit('update', {
                     'board': r_data['board'],
                     'turn': r_data['turn'],
@@ -1019,6 +1070,9 @@ def handle_move(data):
     if r_data['board'][row][col] == '':
         r_data['board'][row][col] = piece
         r_data['last_move'] = {'r': row, 'c': col}
+        if 'move_history' not in r_data:
+            r_data['move_history'] = []
+        r_data['move_history'].append({'row': row, 'col': col, 'piece': piece})
         if not r_data.get('game_active'):
             r_data['game_active'] = True
         
@@ -1056,6 +1110,52 @@ def handle_move(data):
             'game_active': r_data.get('game_active', False)
         }, to=room_id)
         start_turn_clock(room_id)
+
+def handle_undo_request(data):
+    room_id = data.get('room')
+    if room_id not in rooms: return
+    r_data = rooms[room_id]
+    if request.sid not in r_data['players']: return
+    if not r_data.get('game_active') or r_data.get('game_over'): return
+    if not r_data.get('move_history'): return
+
+    piece = r_data['players'][request.sid]['piece']
+    if piece not in ('X', 'O'): return
+    if piece == r_data['turn']: return
+
+    requester_name = r_data['players'][request.sid]['name']
+    # Emit đến toàn bộ phòng, frontend sẽ lọc
+    socketio.emit('undo_request', {
+        'from': requester_name,
+        'from_piece': piece,
+        'from_sid': request.sid
+    }, to=room_id)
+
+def handle_undo_accept(data):
+    room_id = data.get('room')
+    if room_id not in rooms: return
+    r_data = rooms[room_id]
+    if request.sid not in r_data['players']: return
+    if not r_data.get('game_active') or r_data.get('game_over'): return
+    if not r_data.get('move_history'): return
+
+    piece = r_data['players'][request.sid]['piece']
+    if piece not in ('X', 'O'): return
+
+    last = r_data['move_history'].pop()
+    r_data['board'][last['row']][last['col']] = ''
+    r_data['turn'] = last['piece']
+    r_data['last_move'] = None
+    threat_cells = detect_threats(r_data['board'])
+    r_data['threat_cells'] = list(threat_cells) if threat_cells else []
+    socketio.emit('update', {
+        'board': r_data['board'],
+        'turn': r_data['turn'],
+        'last_move': None,
+        'threat_cells': r_data['threat_cells'],
+        'game_active': True
+    }, to=room_id)
+    start_turn_clock(room_id)
 
 def handle_chat(data):
     room_id = data.get('room')
@@ -1167,4 +1267,6 @@ def register(app, socketio_instance):
     socketio_instance.on_event('chat', handle_chat)
     socketio_instance.on_event('surrender', handle_surrender)
     socketio_instance.on_event('reset', handle_reset)
+    socketio_instance.on_event('undo_request', handle_undo_request)
+    socketio_instance.on_event('undo_accept', handle_undo_accept)
     socketio_instance.on_event('get_rooms', handle_get_rooms)
