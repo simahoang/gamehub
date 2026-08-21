@@ -10,7 +10,7 @@ socketio = None
 
 # --- TRẠNG THÁI GAME ---
 BOARD_SIZE = 20 # BẠN CÓ THỂ ĐỔI THÀNH SỐ BẤT KỲ (15, 20, 25...)
-VERSION = "v3.1.9"
+VERSION = "v3.1.10"
 COUNTDOWN_SECONDS = 8
 IDLE_SECONDS = 180
 IDLE_CHECK_INTERVAL = 10
@@ -233,14 +233,17 @@ HTML_PAGE = f"""
         const size = {BOARD_SIZE}; 
 
         // Khởi tạo lưới bàn cờ
+        const cells = [];
         const boardDiv = document.getElementById('board');
         for (let r = 0; r < size; r++) {{
+            cells[r] = [];
             for (let c = 0; c < size; c++) {{
                 const cell = document.createElement('div');
                 cell.className = 'cell';
                 cell.id = `cell-${{r}}-${{c}}`;
                 cell.onclick = () => makeMove(r, c);
                 boardDiv.appendChild(cell);
+                cells[r][c] = cell;
             }}
         }}
 
@@ -466,19 +469,17 @@ HTML_PAGE = f"""
         }}
 
         function updateBoard(boardData, lastMove, winCells, threatCells) {{
-            const prevBoard = lastBoardState ? lastBoardState.board : null;
             const prevThreat = lastBoardState ? (lastBoardState.threatCells || []) : [];
             const prevWin = lastBoardState ? (lastBoardState.winCells || []) : [];
             const prevLastMove = lastBoardState ? lastBoardState.lastMove : null;
             lastBoardState = {{ board: boardData, lastMove: lastMove, winCells: winCells, threatCells: threatCells }};
 
-            // Cập nhật innerText + className cho các ô có nội dung thay đổi
+            // Cập nhật innerText + className cho các ô thay đổi (so với DOM hiện tại)
             for (let r = 0; r < size; r++) {{
                 for (let c = 0; c < size; c++) {{
                     const newVal = boardData[r][c];
-                    const oldVal = prevBoard ? prevBoard[r][c] : null;
-                    if (newVal !== oldVal) {{
-                        const cell = document.getElementById('cell-' + r + '-' + c);
+                    const cell = cells[r][c];
+                    if (cell.innerText !== newVal) {{
                         cell.innerText = newVal;
                         cell.className = 'cell ' + newVal;
                     }}
@@ -487,13 +488,13 @@ HTML_PAGE = f"""
 
             // Xoá last-move ở ô cũ (nếu có)
             if (prevLastMove && (!lastMove || prevLastMove.r !== lastMove.r || prevLastMove.c !== lastMove.c)) {{
-                const cell = document.getElementById('cell-' + prevLastMove.r + '-' + prevLastMove.c);
+                const cell = cells[prevLastMove.r][prevLastMove.c];
                 if (cell) cell.classList.remove('last-move');
             }}
 
             // Thêm last-move ở ô mới (nếu có)
             if (lastMove) {{
-                const cell = document.getElementById('cell-' + lastMove.r + '-' + lastMove.c);
+                const cell = cells[lastMove.r][lastMove.c];
                 if (cell) cell.classList.add('last-move');
             }}
 
@@ -502,13 +503,13 @@ HTML_PAGE = f"""
             const prevThreatSet = new Set(prevThreat.map(pt => pt[0] + ',' + pt[1]));
             (threatCells || []).forEach(pt => {{
                 if (!prevThreatSet.has(pt[0] + ',' + pt[1])) {{
-                    const cell = document.getElementById('cell-' + pt[0] + '-' + pt[1]);
+                    const cell = cells[pt[0]][pt[1]];
                     if (cell && !cell.classList.contains('threat-cell')) cell.classList.add('threat-cell');
                 }}
             }});
             prevThreat.forEach(pt => {{
                 if (!threatSet.has(pt[0] + ',' + pt[1])) {{
-                    const cell = document.getElementById('cell-' + pt[0] + '-' + pt[1]);
+                    const cell = cells[pt[0]][pt[1]];
                     if (cell) cell.classList.remove('threat-cell');
                 }}
             }});
@@ -518,13 +519,13 @@ HTML_PAGE = f"""
             const prevWinSet = new Set(prevWin.map(pt => pt[0] + ',' + pt[1]));
             (winCells || []).forEach(pt => {{
                 if (!prevWinSet.has(pt[0] + ',' + pt[1])) {{
-                    const cell = document.getElementById('cell-' + pt[0] + '-' + pt[1]);
+                    const cell = cells[pt[0]][pt[1]];
                     if (cell) cell.classList.add('win-cell');
                 }}
             }});
             prevWin.forEach(pt => {{
                 if (!winSet.has(pt[0] + ',' + pt[1])) {{
-                    const cell = document.getElementById('cell-' + pt[0] + '-' + pt[1]);
+                    const cell = cells[pt[0]][pt[1]];
                     if (cell) cell.classList.remove('win-cell');
                 }}
             }});
