@@ -10,7 +10,7 @@ socketio = None
 
 # --- TRẠNG THÁI GAME ---
 BOARD_SIZE = 20 # BẠN CÓ THỂ ĐỔI THÀNH SỐ BẤT KỲ (15, 20, 25...)
-VERSION = "v3.1.12"
+VERSION = "v3.1.13"
 COUNTDOWN_SECONDS = 8
 IDLE_SECONDS = 180
 IDLE_CHECK_INTERVAL = 10
@@ -76,6 +76,7 @@ HTML_PAGE = f"""
             width: fit-content;
             margin: 0 auto;
             border: 2px solid #000;
+            contain: layout style;
         }}
         .cell {{
             width: 30px; height: 30px;
@@ -86,9 +87,8 @@ HTML_PAGE = f"""
             font-size: 24px; font-weight: bold;
             cursor: pointer;
             user-select: none;
-            transition: background 0.2s;
-        }}
-        .cell:hover {{ background: oklch(var(--wa) / 0.5); }}
+            }}
+        .cell:hover {{ background: oklch(var(--wa) / 0.5); transition: background 0.1s; }}
         .X {{ color: #e74c3c !important; }}
         .O {{ color: #3498db !important; }}
         .last-move {{
@@ -127,6 +127,13 @@ HTML_PAGE = f"""
             color: #e74c3c !important;
             font-size: 1.3em !important;
             font-weight: 900 !important;
+        }}
+        @keyframes board-urgent {{
+            0%, 100% {{ border-color: #e74c3c; box-shadow: 0 0 8px rgba(231, 76, 60, 0.3); }}
+            50% {{ border-color: #c0392b; box-shadow: 0 0 20px rgba(231, 76, 60, 0.7); }}
+        }}
+        .board-urgent {{
+            animation: board-urgent 0.8s ease-in-out infinite;
         }}
     </style>
 </head>
@@ -168,14 +175,14 @@ HTML_PAGE = f"""
                     <div class="h-px flex-1 bg-base-300"></div>
                 </div>
 
-                <div id="board-wrapper" style="overflow: auto; max-width: 100%;" class="card bg-base-100 shadow-xl p-4 mb-4">
+                <div id="board-wrapper" style="overflow: auto; max-width: 100%; overscroll-behavior: contain;" class="card bg-base-100 shadow-xl p-4 mb-4">
                     <div id="board"></div>
                 </div>
 
                 <div class="flex justify-center gap-3 mt-4">
                     <button id="undo-btn" onclick="requestUndo()" disabled class="btn btn-warning btn-sm">↩ Undo</button>
-                    <button id="surrender-btn" onclick="surrender()" style="display: none;" class="btn btn-error">🏳️ Đầu Hàng</button>
-                    <button onclick="leaveRoom()" class="btn btn-ghost">🚪 Rời Phòng</button>
+                    <button id="surrender-btn" onclick="surrender()" style="display: none;" class="btn btn-error btn-sm">🏳️ Đầu Hàng</button>
+                    <button onclick="leaveRoom()" class="btn btn-ghost btn-sm">🚪 Rời Phòng</button>
 </div>
 
             <div id="undo-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 hidden">
@@ -381,10 +388,13 @@ HTML_PAGE = f"""
                 t.style.display = 'inline-block';
                 t.innerText = '⏱ còn ' + data.seconds + 's';
                 const urgent = data.seconds <= Math.min(10, roomTurnSeconds * 0.25);
+                const bw = document.getElementById('board-wrapper');
                 if (urgent) {{
                     t.classList.add('timer-urgent');
+                    bw.classList.add('board-urgent');
                 }} else {{
                     t.classList.remove('timer-urgent');
+                    bw.classList.remove('board-urgent');
                 }}
             }} else {{
                 resetTurnTimer();
@@ -428,6 +438,7 @@ HTML_PAGE = f"""
             t.innerText = '';
             t.classList.remove('timer-urgent');
             t.style.display = 'none';
+            document.getElementById('board-wrapper').classList.remove('board-urgent');
         }}
 
         function updateRole() {{
@@ -475,21 +486,11 @@ HTML_PAGE = f"""
             const prevBoard = lastBoardState ? lastBoardState.board : null;
             lastBoardState = {{ board: boardData, lastMove: lastMove, winCells: winCells, threatCells: threatCells }};
 
-            // Cập nhật nội dung các ô thay đổi (dùng classList, không set className)
-            if (!prevBoard) {{
-                for (let r = 0; r < size; r++) {{
-                    for (let c = 0; c < size; c++) {{
-                        const v = boardData[r][c];
-                        const cell = cells[r][c];
-                        cell.innerText = v;
-                        cell.classList.remove('X', 'O');
-                        if (v) cell.classList.add(v);
-                    }}
-                }}
-            }} else {{
-                for (let r = 0; r < size; r++) {{
-                    for (let c = 0; c < size; c++) {{
-                        if (boardData[r][c] !== prevBoard[r][c]) {{
+            requestAnimationFrame(() => {{
+                // Cập nhật nội dung các ô thay đổi (dùng classList, không set className)
+                if (!prevBoard) {{
+                    for (let r = 0; r < size; r++) {{
+                        for (let c = 0; c < size; c++) {{
                             const v = boardData[r][c];
                             const cell = cells[r][c];
                             cell.innerText = v;
@@ -497,36 +498,48 @@ HTML_PAGE = f"""
                             if (v) cell.classList.add(v);
                         }}
                     }}
+                }} else {{
+                    for (let r = 0; r < size; r++) {{
+                        for (let c = 0; c < size; c++) {{
+                            if (boardData[r][c] !== prevBoard[r][c]) {{
+                                const v = boardData[r][c];
+                                const cell = cells[r][c];
+                                cell.innerText = v;
+                                cell.classList.remove('X', 'O');
+                                if (v) cell.classList.add(v);
+                            }}
+                        }}
+                    }}
                 }}
-            }}
 
-            // Xoá last-move ở ô cũ
-            if (prevLastMove && (!lastMove || prevLastMove.r !== lastMove.r || prevLastMove.c !== lastMove.c)) {{
-                cells[prevLastMove.r][prevLastMove.c].classList.remove('last-move');
-            }}
-            // Thêm last-move ở ô mới
-            if (lastMove) {{
-                cells[lastMove.r][lastMove.c].classList.add('last-move');
-            }}
+                // Xoá last-move ở ô cũ
+                if (prevLastMove && (!lastMove || prevLastMove.r !== lastMove.r || prevLastMove.c !== lastMove.c)) {{
+                    cells[prevLastMove.r][prevLastMove.c].classList.remove('last-move');
+                }}
+                // Thêm last-move ở ô mới
+                if (lastMove) {{
+                    cells[lastMove.r][lastMove.c].classList.add('last-move');
+                }}
 
-            // Threat cells
-            const threatSet = new Set((threatCells || []).map(pt => pt[0] + ',' + pt[1]));
-            const prevThreatSet = new Set(prevThreat.map(pt => pt[0] + ',' + pt[1]));
-            (threatCells || []).forEach(pt => {{
-                if (!prevThreatSet.has(pt[0] + ',' + pt[1])) cells[pt[0]][pt[1]].classList.add('threat-cell');
-            }});
-            prevThreat.forEach(pt => {{
-                if (!threatSet.has(pt[0] + ',' + pt[1])) cells[pt[0]][pt[1]].classList.remove('threat-cell');
-            }});
+                // Threat cells
+                const threatSet = new Set((threatCells || []).map(pt => pt[0] + ',' + pt[1]));
+                const prevThreatSet = new Set(prevThreat.map(pt => pt[0] + ',' + pt[1]));
+                (threatCells || []).forEach(pt => {{
+                    if (!prevThreatSet.has(pt[0] + ',' + pt[1])) cells[pt[0]][pt[1]].classList.add('threat-cell');
+                }});
+                prevThreat.forEach(pt => {{
+                    if (!threatSet.has(pt[0] + ',' + pt[1])) cells[pt[0]][pt[1]].classList.remove('threat-cell');
+                }});
 
-            // Win cells
-            const winSet = new Set((winCells || []).map(pt => pt[0] + ',' + pt[1]));
-            const prevWinSet = new Set(prevWin.map(pt => pt[0] + ',' + pt[1]));
-            (winCells || []).forEach(pt => {{
-                if (!prevWinSet.has(pt[0] + ',' + pt[1])) cells[pt[0]][pt[1]].classList.add('win-cell');
-            }});
-            prevWin.forEach(pt => {{
-                if (!winSet.has(pt[0] + ',' + pt[1])) cells[pt[0]][pt[1]].classList.remove('win-cell');
+                // Win cells
+                const winSet = new Set((winCells || []).map(pt => pt[0] + ',' + pt[1]));
+                const prevWinSet = new Set(prevWin.map(pt => pt[0] + ',' + pt[1]));
+                (winCells || []).forEach(pt => {{
+                    if (!prevWinSet.has(pt[0] + ',' + pt[1])) cells[pt[0]][pt[1]].classList.add('win-cell');
+                }});
+                prevWin.forEach(pt => {{
+                    if (!winSet.has(pt[0] + ',' + pt[1])) cells[pt[0]][pt[1]].classList.remove('win-cell');
+                }});
             }});
         }}
 
