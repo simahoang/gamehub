@@ -10,7 +10,7 @@ socketio = None
 
 # --- TRẠNG THÁI GAME ---
 BOARD_SIZE = 20 # BẠN CÓ THỂ ĐỔI THÀNH SỐ BẤT KỲ (15, 20, 25...)
-VERSION = "v2.6.3"
+VERSION = "v2.7"
 COUNTDOWN_SECONDS = 8
 IDLE_SECONDS = 180
 IDLE_CHECK_INTERVAL = 10
@@ -24,12 +24,14 @@ ALLOW_SAME_IP = False
 def create_empty_board():
     return [['' for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
 
-# Mở sẵn 3 phòng cố định (Thêm trường win_cells để lưu chuỗi ô chiến thắng)
+# Mở sẵn 4 phòng cố định với thời gian mỗi nước khác nhau (turn_seconds)
 rooms = {
-    'Phòng 1': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None},
-    'Phòng 2': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None},
-    'Phòng 3': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None},
-    'Phòng 4': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None},
+    'Tiêu chuẩn 1':  {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 45},
+    'Tiêu chuẩn 2': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 45},
+    'Tiêu chuẩn 3':   {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 45},
+    'Siêu nhanh':  {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 15},
+    'Không suy nghĩ':  {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 5},
+    'Siêu chậm':  {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 180},
 }       
 user_rooms = {}
 
@@ -318,9 +320,14 @@ HTML_PAGE = f"""
                 if (r.seated === 0) label = 'Trống';
                 else if (r.seated === 1) label = 'Đang đợi';
                 else label = 'Đầy';
+                const ts = r.turn_seconds || 40;
+                let icon = '🕐';
+                if (ts <= 15) icon = '⚡';
+                else if (ts <= 30) icon = '🔥';
+                else if (ts >= 120) icon = '🐢';
                 const btn = document.createElement('button');
                 btn.className = 'btn-room';
-                btn.innerText = '🚪 ' + r.room + ' — ' + label;
+                btn.innerText = '🚪 ' + r.room + ' (' + ts + 's ' + icon + ') — ' + label;
                 btn.onclick = () => joinSpecificRoom(r.room);
                 list.appendChild(btn);
             }});
@@ -334,6 +341,8 @@ HTML_PAGE = f"""
             myName = data.player_name || 'Unknown';
             currentTurn = data.turn;
             updateRole();
+            const ts = data.turn_seconds || 40;
+            document.getElementById('roomTitle').innerText = 'Đang chơi tại: ' + currentRoom + ' (' + ts + 's/nước)';
             const chatContainer = document.getElementById('chat-messages');
             chatContainer.innerHTML = '';
             if (data.chat_history) {{
@@ -691,8 +700,20 @@ def check_threat_pattern(board, row, col, dr, dc, piece):
                     result.extend(all_cells)
 
             # Pattern 5: Broken Three – total == 3, 1 gap, 2 đầu hở (lấp gap → Open Four → thắng chắc)
+            # Điều kiện: ô beyond đầu hở không được là quân đối thủ (nếu có → mở rộng hướng đó tạo chuỗi bị chặn 2 đầu)
             if total == 3 and backward_open and gap_end_open:
-                result.extend(all_cells)
+                # Check ô beyond backward_end: nếu là opponent → hướng này là ngõ cụt
+                beyond_r = backward_end_r - dr
+                beyond_c = backward_end_c - dc
+                backward_blocked = (0 <= beyond_r < BOARD_SIZE and 0 <= beyond_c < BOARD_SIZE 
+                                    and board[beyond_r][beyond_c] == opponent)
+                # Check ô beyond gap_end: nếu là opponent → hướng này là ngõ cụt
+                beyond_gr = gr + dr
+                beyond_gc = gc + dc
+                forward_blocked = (0 <= beyond_gr < BOARD_SIZE and 0 <= beyond_gc < BOARD_SIZE 
+                                   and board[beyond_gr][beyond_gc] == opponent)
+                if not backward_blocked and not forward_blocked:
+                    result.extend(all_cells)
 
     # Pattern 3 & 5: Gap detection phía backward
     if backward_open:
@@ -719,8 +740,20 @@ def check_threat_pattern(board, row, col, dr, dc, piece):
                     result.extend(all_cells)
 
             # Pattern 5: Broken Three – total == 3, 1 gap, 2 đầu hở (lấp gap → Open Four → thắng chắc)
+            # Điều kiện: ô beyond đầu hở không được là quân đối thủ (nếu có → mở rộng hướng đó tạo chuỗi bị chặn 2 đầu)
             if total == 3 and forward_open and gap_end_open:
-                result.extend(all_cells)
+                # Check ô beyond forward_end: nếu là opponent → hướng này là ngõ cụt
+                beyond_r = forward_end_r + dr
+                beyond_c = forward_end_c + dc
+                forward_blocked = (0 <= beyond_r < BOARD_SIZE and 0 <= beyond_c < BOARD_SIZE 
+                                   and board[beyond_r][beyond_c] == opponent)
+                # Check ô beyond gap_end: nếu là opponent → hướng này là ngõ cụt
+                beyond_gr = gr - dr
+                beyond_gc = gc - dc
+                backward_blocked = (0 <= beyond_gr < BOARD_SIZE and 0 <= beyond_gc < BOARD_SIZE 
+                                    and board[beyond_gr][beyond_gc] == opponent)
+                if not backward_blocked and not forward_blocked:
+                    result.extend(all_cells)
 
     return result
 
@@ -745,7 +778,7 @@ def countdown_worker(room_id):
     if socketio is None or room_id not in rooms:
         return
     r_data = rooms[room_id]
-    for sec in range(5, -1, -1):
+    for sec in range(COUNTDOWN_SECONDS, -1, -1):
         r_data['countdown_seconds'] = sec
         socketio.emit('countdown', {'seconds': sec}, to=room_id)
         if sec > 0:
@@ -793,7 +826,8 @@ def start_turn_clock(room_id):
     if socketio is None or room_id not in rooms:
         return
     r_data = rooms[room_id]
-    r_data['turn_deadline'] = time.time() + TURN_SECONDS
+    turn_seconds = r_data.get('turn_seconds', TURN_SECONDS)
+    r_data['turn_deadline'] = time.time() + turn_seconds
     socketio.start_background_task(turn_clock_worker, room_id, r_data['turn'])
 
 def turn_clock_worker(room_id, piece):
@@ -843,6 +877,7 @@ def handle_join(data):
             'countdown_seconds': 0,
             'chat_history': [],
             'turn_deadline': None,
+            'turn_seconds': TURN_SECONDS,
         }
 
     r_data = rooms[room_id]
@@ -869,7 +904,8 @@ def handle_join(data):
         'game_over': r_data.get('game_over', False),
         'game_active': r_data.get('game_active', False),
         'countdown_seconds': r_data.get('countdown_seconds', 0),
-        'chat_history': r_data.get('chat_history', [])
+        'chat_history': r_data.get('chat_history', []),
+        'turn_seconds': r_data.get('turn_seconds', TURN_SECONDS)
     }, to=request.sid)
 
     player_list = [{'sid': sid, 'name': p['name'], 'piece': p['piece']} for sid, p in r_data['players'].items()]
@@ -1106,7 +1142,7 @@ def get_rooms_summary():
     summary = []
     for name, r in rooms.items():
         seated = sum(1 for p in r['players'].values() if p['piece'] in ('X', 'O'))
-        summary.append({'room': name, 'seated': seated})
+        summary.append({'room': name, 'seated': seated, 'turn_seconds': r.get('turn_seconds', TURN_SECONDS)})
     return summary
 
 def broadcast_room_list():
