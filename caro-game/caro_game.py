@@ -10,7 +10,7 @@ socketio = None
 
 # --- TRẠNG THÁI GAME ---
 BOARD_SIZE = 20 # BẠN CÓ THỂ ĐỔI THÀNH SỐ BẤT KỲ (15, 20, 25...)
-VERSION = "v2.6"
+VERSION = "v2.6.3"
 COUNTDOWN_SECONDS = 8
 IDLE_SECONDS = 180
 IDLE_CHECK_INTERVAL = 10
@@ -19,7 +19,7 @@ TURN_SECONDS = 40
 # --- CONFIG ---
 # Bật (True) để cho phép cùng 1 IP cầm cả X và O (dùng khi self-test).
 # Tắt (False) để chặn trùng IP như bình thường.
-ALLOW_SAME_IP = True
+ALLOW_SAME_IP = False
 
 def create_empty_board():
     return [['' for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
@@ -29,6 +29,7 @@ rooms = {
     'Phòng 1': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None},
     'Phòng 2': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None},
     'Phòng 3': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None},
+    'Phòng 4': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None},
 }       
 user_rooms = {}
 
@@ -679,14 +680,18 @@ def check_threat_pattern(board, row, col, dr, dc, piece):
 
             all_cells = cells + gap_cells
 
-            # Pattern 3: Broken Four – total >= 4, 1 gap, ít nhất 1 đầu hở
-            if total == 4 and (backward_open or gap_end_open):
-                result.extend(all_cells)
+            # Pattern 3: Broken Four – total == 4, 1 gap, lấp gap → 5 (thắng nếu <2 đầu bị đối thủ chặn)
+            if total == 4:
+                opp_blocks = 0
+                if 0 <= backward_end_r < BOARD_SIZE and 0 <= backward_end_c < BOARD_SIZE and board[backward_end_r][backward_end_c] == opponent:
+                    opp_blocks += 1
+                if 0 <= gr < BOARD_SIZE and 0 <= gc < BOARD_SIZE and board[gr][gc] == opponent:
+                    opp_blocks += 1
+                if opp_blocks < 2:
+                    result.extend(all_cells)
 
-            # Pattern 5: Broken Three – total == 3, 1 gap, cả 2 đầu hở, ít nhất 1 phía có ≥2 ô trống
-            gap_end_open2 = (0 <= gr + dr < BOARD_SIZE and 0 <= gc + dc < BOARD_SIZE
-                             and board[gr + dr][gc + dc] == '') if gap_end_open else False
-            if total == 3 and backward_open and gap_end_open and (backward_open2 and gap_end_open2):
+            # Pattern 5: Broken Three – total == 3, 1 gap, 2 đầu hở (lấp gap → Open Four → thắng chắc)
+            if total == 3 and backward_open and gap_end_open:
                 result.extend(all_cells)
 
     # Pattern 3 & 5: Gap detection phía backward
@@ -703,14 +708,18 @@ def check_threat_pattern(board, row, col, dr, dc, piece):
 
             all_cells = cells + gap_cells
 
-            # Pattern 3: Broken Four – total >= 4, 1 gap, ít nhất 1 đầu hở
-            if total == 4 and (forward_open or gap_end_open):
-                result.extend(all_cells)
+            # Pattern 3: Broken Four – total == 4, 1 gap, lấp gap → 5 (thắng nếu <2 đầu bị đối thủ chặn)
+            if total == 4:
+                opp_blocks = 0
+                if 0 <= forward_end_r < BOARD_SIZE and 0 <= forward_end_c < BOARD_SIZE and board[forward_end_r][forward_end_c] == opponent:
+                    opp_blocks += 1
+                if 0 <= gr < BOARD_SIZE and 0 <= gc < BOARD_SIZE and board[gr][gc] == opponent:
+                    opp_blocks += 1
+                if opp_blocks < 2:
+                    result.extend(all_cells)
 
-            # Pattern 5: Broken Three – total == 3, 1 gap, cả 2 đầu hở, ít nhất 1 phía có ≥2 ô trống
-            gap_end_open2 = (0 <= gr - dr < BOARD_SIZE and 0 <= gc - dc < BOARD_SIZE
-                             and board[gr - dr][gc - dc] == '') if gap_end_open else False
-            if total == 3 and forward_open and gap_end_open and (forward_open2 and gap_end_open2):
+            # Pattern 5: Broken Three – total == 3, 1 gap, 2 đầu hở (lấp gap → Open Four → thắng chắc)
+            if total == 3 and forward_open and gap_end_open:
                 result.extend(all_cells)
 
     return result

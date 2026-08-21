@@ -4,6 +4,32 @@ Nhật ký thay đổi theo version. PM agent ghi vào đây khi release.
 
 ---
 
+## [v2.6.1] - 2026-08-21
+
+### Fixed
+- **Cảnh báo nguy hiểm bỏ sót broken-three sát biên**: pattern `_ _ X X _ X _ |` (2 đầu hở, sát mép) trước không cảnh báo dù lấp gap tạo **Open Four (thắng chắc)** — do điều kiện cũ đòi `open2` (≥2 ô trống). Sửa nhánh "Broken Three" (`total == 3`) theo đúng luật (BA xác nhận): flag khi **cả 2 đầu hở** (`backward_open and gap_end_open`), không flag khi 1 đầu bị O chặn.
+- **Cảnh báo nguy hiểm bỏ sót broken-four 1 đầu biên**: pattern `_ O X X _ X X |` (total==4, 1 đầu O + 1 đầu biên) trước không cảnh báo dù lấp gap → **5 quân thắng**. Sửa nhánh "Broken Four" (`total == 4`) dùng logic `opponent_blocks < 2` (đồng bộ `check_win`) thay vì `(backward_open or gap_end_open)` đơn giản.
+
+---
+
+## [v2.6] - 2026-08-20
+
+### Added
+- **Đồng hồ đếm ngược (40 giây/nước)**: `TURN_SECONDS=40`, `turn_clock_worker` đếm ngược mỗi nước; hết giờ → người tới lượt **tính thua** (đối thủ thắng); hiển thị đồng hồ `#turn-timer`.
+
+### Fixed
+- **Hiển thị tên người thắng**: payload `game_over` thêm `winner_name`; tách khu kết quả `#result` riêng để countdown không ghi đè tên; hiển thị "Tên (quân) THẮNG!" cho thắng thường + đầu hàng + hết giờ.
+- **Xóa chat_history khi phòng trống hoàn toàn**: `handle_disconnect` reset chat + bàn khi không còn player nào (kể cả khán giả).
+- **Rate-limit chat server-side**: giới hạn 1 tin/giây theo sid + `message[:200]`.
+
+### Removed
+- Nút Bật/Tắt cảnh báo nguy hiểm (threat toggle) — threat luôn hiển thị.
+
+### Changed
+- `VERSION` = "v2.6"
+
+---
+
 ## [v2.5] - 2026-08-20
 
 ### Fixed

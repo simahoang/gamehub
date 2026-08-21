@@ -12,6 +12,10 @@ PLAYERS_FILE = os.path.join(BASE_DIR, 'players.json')
 sys.path.insert(0, os.path.join(BASE_DIR, 'caro-game'))
 import caro_game
 
+# Import pet_game module
+sys.path.insert(0, os.path.join(BASE_DIR, 'pet-game'))
+import pet_game
+
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'hub-secret'
 socketio = SocketIO(app, cors_allowed_origins=[])
@@ -53,12 +57,12 @@ HUB_HTML = """
         <a class="game-card" href="/caro">
             <div class="icon">❌ ⭕</div>
             <div class="name">Cờ Caro</div>
-            <div class="desc">Gomoku 5 quân</div>
+            <div class="desc"></div>
         </a>
         <a class="game-card" href="/pet">
             <div class="icon">🐾</div>
             <div class="name">Nuôi Thú Ảo</div>
-            <div class="desc">Sắp ra mắt</div>
+            <div class="desc"></div>
         </a>
     </div>
 
@@ -103,6 +107,7 @@ def set_username():
 
 # Register games
 caro_game.register(app, socketio)
+pet_game.register(app, socketio)
 
 if __name__ == '__main__':
     host_ip = socket.gethostbyname(socket.gethostname())

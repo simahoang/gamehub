@@ -1,5 +1,19 @@
 # Pet Game - Nuôi Thú Ảo (Pokémon Fanmade)
-# Module này sẽ được mount vào hub.py sau
+# Module được mount vào hub.py
+
+import json
+import os
+import random
+import time
+
+from flask import request, send_from_directory, jsonify
+from flask_socketio import emit
+
+VERSION = "v1.0"
+
+# ============================================================
+# DATA (Giữ nguyên từ stub)
+# ============================================================
 
 POKEMON_GEN1 = {
     1: "Bulbasaur", 2: "Ivysaur", 3: "Venusaur", 4: "Charmander", 5: "Charmeleon",
@@ -65,3 +79,688 @@ def get_sprite_url(pokemon_id):
 
 def get_pokemon_name(pokemon_id):
     return ALL_POKEMON.get(pokemon_id, f"Unknown #{pokemon_id}")
+
+# ============================================================
+# EVOLUTION TREE (chuỗi tiến hóa chuẩn Gen 1-2)
+# species_id -> [danh sách id tiến hóa kế tiếp]
+# ============================================================
+
+EVOLUTION_TREE = {
+    1: [2], 2: [3],
+    4: [5], 5: [6],
+    7: [8], 8: [9],
+    10: [11], 11: [12],
+    13: [14], 14: [15],
+    16: [17], 17: [18],
+    19: [20],
+    21: [22],
+    23: [24],
+    172: [25], 25: [26],
+    27: [28],
+    29: [30], 30: [31],
+    32: [33], 33: [34],
+    173: [35], 35: [36],
+    37: [38],
+    174: [39], 39: [40],
+    41: [42], 42: [169],
+    43: [44], 44: [45, 182],
+    46: [47],
+    48: [49],
+    50: [51],
+    52: [53],
+    54: [55],
+    56: [57],
+    58: [59],
+    60: [61], 61: [62, 186],
+    63: [64], 64: [65],
+    66: [67], 67: [68],
+    69: [70], 70: [71],
+    72: [73],
+    74: [75], 75: [76],
+    77: [78],
+    79: [80, 199],
+    81: [82],
+    84: [85],
+    86: [87],
+    88: [89],
+    90: [91],
+    92: [93], 93: [94],
+    95: [208],
+    96: [97],
+    98: [99],
+    100: [101],
+    102: [103],
+    104: [105],
+    236: [106, 107, 237],
+    109: [110],
+    111: [112],
+    113: [242],
+    116: [117], 117: [230],
+    118: [119],
+    120: [121],
+    123: [212],
+    238: [124],
+    239: [125],
+    240: [126],
+    129: [130],
+    133: [134, 135, 136, 196, 197],
+    137: [233],
+    138: [139],
+    140: [141],
+    147: [148], 148: [149],
+    152: [153], 153: [154],
+    155: [156], 156: [157],
+    158: [159], 159: [160],
+    161: [162],
+    163: [164],
+    165: [166],
+    167: [168],
+    170: [171],
+    175: [176],
+    177: [178],
+    179: [180], 180: [181],
+    183: [184],
+    187: [188], 188: [189],
+    191: [192],
+    194: [195],
+    204: [205],
+    209: [210],
+    216: [217],
+    218: [219],
+    220: [221],
+    223: [224],
+    228: [229],
+    231: [232],
+    246: [247], 247: [248],
+}
+
+LEGENDARY_IDS = {144, 145, 146, 150, 243, 244, 245, 249, 250}
+MYTHICAL_IDS = {151, 251}
+
+LEGENDARY_CHANCE = 0.001
+MYTHICAL_CHANCE = 0.1
+
+# BASE_FORMS: các id không phải là đích tiến hóa của bất kỳ loài nào
+_EVOLUTION_TARGETS = {target for targets in EVOLUTION_TREE.values() for target in targets}
+BASE_FORMS = {pid for pid in ALL_POKEMON if pid not in _EVOLUTION_TARGETS}
+
+# Pool thường: BASE_FORMS loại trừ legendary & mythical
+NORMAL_POOL = sorted(pid for pid in BASE_FORMS if pid not in LEGENDARY_IDS and pid not in MYTHICAL_IDS)
+
+# ============================================================
+# CONFIG DECAY & ACTION (điểm / giờ)
+# ============================================================
+
+HUNGER_DECAY = 6.0
+HAPPINESS_DECAY = 4.0
+ENERGY_DECAY = 3.0
+SICK_HEALTH_DECAY = 5.0    # health giảm khi đang ốm
+HEALTH_RECOVER = 2.0       # health hồi khi hết ốm
+
+START_STATE = {
+    'hunger': 100,
+    'happiness': 100,
+    'energy': 100,
+    'health': 100,
+    'age_hours': 0.0,
+    'sick': False,
+    'in_center': False,
+    'center_since': None,
+}
+
+ACTIONS = {
+    'feed':   {'hunger': 30, 'happiness': 5},
+    'play':   {'happiness': 25, 'energy': -10},
+    'sleep':  {'energy': 40, 'health': 5},
+    'heal':   {'health': 30},
+    'clean':  {'happiness': 5, 'health': 10},
+}
+
+# ============================================================
+# STORAGE
+# ============================================================
+
+socketio = None
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PETS_FILE = os.path.join(BASE_DIR, 'pets.json')
+LEGENDARY_FILE = os.path.join(BASE_DIR, 'legendary.json')
+PLAYERS_FILE = os.path.join(BASE_DIR, 'players.json')
+
+def load_pets():
+    if not os.path.exists(PETS_FILE):
+        return {}
+    try:
+        with open(PETS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+def save_pets(pets):
+    with open(PETS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(pets, f, ensure_ascii=False, indent=2)
+
+def load_legendary():
+    if not os.path.exists(LEGENDARY_FILE):
+        return {}
+    try:
+        with open(LEGENDARY_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+def save_legendary(legendary):
+    with open(LEGENDARY_FILE, 'w', encoding='utf-8') as f:
+        json.dump(legendary, f, ensure_ascii=False, indent=2)
+
+def load_player_names():
+    if not os.path.exists(PLAYERS_FILE):
+        return {}
+    with open(PLAYERS_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def resolve_player_name(ip):
+    names = load_player_names()
+    entry = names.get(ip)
+    if isinstance(entry, dict):
+        return entry.get('name', f"Guest_{ip}")
+    if isinstance(entry, str):
+        return entry
+    return f"Guest_{ip}"
+
+# ============================================================
+# SPIN & RARITY (huyền thoại / bí ẩn - 1 con duy nhất toàn server)
+# ============================================================
+
+def make_slot(pid, tier):
+    return {
+        'species_id': pid,
+        'name': get_pokemon_name(pid),
+        'sprite': get_sprite_url(pid),
+        'tier': tier,
+    }
+
+def roll_slot(owned, shown):
+    """owned, shown là các set int. Trả slot theo 3 tầng rarity."""
+    if random.random() < LEGENDARY_CHANCE:
+        if random.random() < MYTHICAL_CHANCE:
+            primary_group, primary_tier = MYTHICAL_IDS, 'mythical'
+        else:
+            primary_group, primary_tier = LEGENDARY_IDS, 'legendary'
+
+        candidates = [p for p in primary_group if p not in owned and p not in shown]
+        if candidates:
+            return make_slot(random.choice(candidates), primary_tier)
+
+        other_group = LEGENDARY_IDS if primary_tier == 'mythical' else MYTHICAL_IDS
+        other_tier = 'legendary' if primary_tier == 'mythical' else 'mythical'
+        candidates = [p for p in other_group if p not in owned and p not in shown]
+        if candidates:
+            return make_slot(random.choice(candidates), other_tier)
+
+    candidates = [p for p in NORMAL_POOL if p not in shown]
+    return make_slot(random.choice(candidates), 'normal')
+
+def generate_spin(n=3):
+    owned = {int(k) for k in load_legendary().keys()}
+    shown = set()
+    slots = []
+    for _ in range(n):
+        slot = roll_slot(owned, shown)
+        shown.add(slot['species_id'])
+        slots.append(slot)
+    return slots
+
+# ============================================================
+# CORE LOGIC
+# ============================================================
+
+def clamp(value, low=0, high=100):
+    return max(low, min(high, value))
+
+def derive_sick(pet):
+    """Ốm khi ít nhất một chỉ số lõi (hunger/happiness/energy) về 0."""
+    return pet['hunger'] <= 0 or pet['happiness'] <= 0 or pet['energy'] <= 0
+
+def run_catch_up(pet):
+    """Trừ decay + cộng tuổi theo thời gian đã trôi qua, rồi cập nhật last_updated."""
+    now = time.time()
+    if pet.get('in_center'):
+        pet['last_updated'] = now
+        return pet
+    try:
+        elapsed = max(0.0, now - float(pet.get('last_updated', now))) / 3600.0
+    except (TypeError, ValueError):
+        elapsed = 0.0
+
+    pet['hunger'] = clamp(pet['hunger'] - HUNGER_DECAY * elapsed)
+    pet['happiness'] = clamp(pet['happiness'] - HAPPINESS_DECAY * elapsed)
+    pet['energy'] = clamp(pet['energy'] - ENERGY_DECAY * elapsed)
+    pet['age_hours'] = float(pet.get('age_hours', 0.0)) + elapsed
+
+    sick = derive_sick(pet)
+    pet['sick'] = sick
+    if sick:
+        pet['health'] = clamp(pet['health'] - SICK_HEALTH_DECAY * elapsed)
+    else:
+        pet['health'] = clamp(pet['health'] + HEALTH_RECOVER * elapsed)
+
+    pet['last_updated'] = now
+    return pet
+
+def apply_action(pet, action):
+    """Áp hiệu ứng hành động, clamp 0-100. heal: clear sick nếu health > 20."""
+    for key, delta in ACTIONS[action].items():
+        pet[key] = clamp(pet.get(key, 0) + delta)
+    if action == 'heal':
+        if pet['health'] > 20:
+            pet['sick'] = False
+    else:
+        pet['sick'] = derive_sick(pet)
+    return pet
+
+def new_pet(species_id):
+    return {
+        'species_id': species_id,
+        'hunger': START_STATE['hunger'],
+        'happiness': START_STATE['happiness'],
+        'energy': START_STATE['energy'],
+        'health': START_STATE['health'],
+        'age_hours': START_STATE['age_hours'],
+        'sick': START_STATE['sick'],
+        'in_center': START_STATE['in_center'],
+        'center_since': START_STATE['center_since'],
+        'last_updated': time.time(),
+    }
+
+def format_age(hours):
+    if hours < 24:
+        return f"{hours:.1f} giờ"
+    return f"{hours / 24:.1f} ngày"
+
+def format_duration(seconds):
+    try:
+        seconds = max(0, int(seconds))
+    except (TypeError, ValueError):
+        return "0 phút"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} phút"
+    hours, rem = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours} giờ {rem} phút"
+    return f"{hours // 24} ngày"
+
+def pet_to_client(pet, ip):
+    return {
+        'species_id': pet['species_id'],
+        'name': get_pokemon_name(pet['species_id']),
+        'sprite': get_sprite_url(pet['species_id']),
+        'hunger': int(round(pet.get('hunger', 0))),
+        'happiness': int(round(pet.get('happiness', 0))),
+        'energy': int(round(pet.get('energy', 0))),
+        'health': int(round(pet.get('health', 0))),
+        'age_hours': round(pet.get('age_hours', 0.0), 2),
+        'age_text': format_age(pet.get('age_hours', 0.0)),
+        'sick': bool(pet.get('sick', False)),
+        'in_center': bool(pet.get('in_center', False)),
+        'center_since': pet.get('center_since'),
+        'center_text': format_duration(time.time() - float(pet['center_since'])) if (pet.get('in_center') and pet.get('center_since')) else None,
+        'player_name': resolve_player_name(ip),
+    }
+
+# ============================================================
+# UI (DaisyUI CDN)
+# ============================================================
+
+HTML_PAGE = """<!DOCTYPE html>
+<html lang="vi" data-theme="cupcake">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pet Game - Nuôi Thú Ảo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.14/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-amber-100 via-orange-100 to-rose-100 flex items-center justify-center p-4">
+
+    <!-- MÀN SPIN -->
+    <div id="spin-screen" class="w-full max-w-4xl hidden">
+        <div class="text-center mb-6">
+            <h1 class="text-4xl font-extrabold text-primary">🐾 Pet Game</h1>
+            <p class="text-neutral-500 mt-2">Chào <span class="font-bold">%%PLAYER_NAME%%</span>! Chọn một thú cưng để bắt đầu nuôi.</p>
+        </div>
+        <div class="text-center mb-6">
+            <button onclick="reroll()" class="btn btn-primary btn-lg">🎲 Quay</button>
+        </div>
+        <div id="spin-cards" class="grid grid-cols-1 sm:grid-cols-3 gap-4"></div>
+    </div>
+
+    <!-- MÀN CHÍNH -->
+    <div id="main-screen" class="w-full max-w-md hidden">
+        <div class="card bg-base-100 shadow-xl">
+            <div class="card-body items-center text-center">
+                <div class="flex items-center gap-2">
+                    <h1 class="text-3xl font-extrabold text-primary">🐾 Pet Game</h1>
+                    <span id="sick-badge" class="badge badge-error badge-lg hidden">😷 Ốm</span>
+                </div>
+                <div class="relative">
+                    <img id="pet-sprite" src="" alt="pet" class="w-64 h-64 object-contain image-render-pixel">
+                    <div id="sprite-overlay" class="absolute inset-0 flex items-center justify-center text-7xl pointer-events-none hidden"></div>
+                </div>
+                <div>
+                    <h2 id="pet-name" class="text-2xl font-bold"></h2>
+                    <p id="pet-age" class="text-sm text-neutral-500"></p>
+                    <p class="text-xs text-neutral-400">Người nuôi: <span id="player-name"></span></p>
+                </div>
+                <p id="center-status" class="text-sm text-info font-semibold hidden"></p>
+
+                <div class="w-full space-y-3 text-left pt-4">
+                    <div>
+                        <div class="flex justify-between text-sm mb-1"><span>🍖 Đói</span><span id="hunger-txt"></span></div>
+                        <progress id="hunger-bar" class="progress progress-error" value="0" max="100"></progress>
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-sm mb-1"><span>😊 Vui vẻ</span><span id="happiness-txt"></span></div>
+                        <progress id="happiness-bar" class="progress progress-warning" value="0" max="100"></progress>
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-sm mb-1"><span>⚡ Năng lượng</span><span id="energy-txt"></span></div>
+                        <progress id="energy-bar" class="progress progress-info" value="0" max="100"></progress>
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-sm mb-1"><span>❤️ Sức khỏe</span><span id="health-txt"></span></div>
+                        <progress id="health-bar" class="progress progress-success" value="0" max="100"></progress>
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap justify-center gap-2 pt-4">
+                    <button id="btn-feed" onclick="doAction('feed')" class="btn btn-success btn-sm">🍖 Ăn</button>
+                    <button id="btn-play" onclick="doAction('play')" class="btn btn-warning btn-sm">🎮 Chơi</button>
+                    <button id="btn-sleep" onclick="doAction('sleep')" class="btn btn-info btn-sm">😴 Ngủ</button>
+                    <button id="btn-heal" onclick="doAction('heal')" class="btn btn-error btn-sm">💊 Chữa</button>
+                    <button id="btn-clean" onclick="doAction('clean')" class="btn btn-secondary btn-sm">🧼 Dọn</button>
+                </div>
+
+                <div class="divider"></div>
+                <button id="center-btn" onclick="toggleCenter()" class="btn btn-info btn-outline w-full">🏥 Gửi vào Trung Tâm</button>
+                <button onclick="openRelease()" class="btn btn-error btn-outline w-full mt-2">🗑️ Thả Pokémon</button>
+            </div>
+        </div>
+    </div>
+
+    <dialog id="release-modal" class="modal">
+        <div class="modal-box">
+            <h3 class="font-bold text-lg">Thả Pokémon?</h3>
+            <p class="py-4">Bạn chắc chắn muốn thả thú cưng hiện tại? Thao tác này không thể hoàn tác.</p>
+            <div class="modal-action">
+                <button class="btn" onclick="closeRelease()">Hủy</button>
+                <button class="btn btn-error" onclick="confirmRelease()">Thả</button>
+            </div>
+        </div>
+    </dialog>
+
+    <script>
+        const VERSION = "%%VERSION%%";
+        const PET_STATE = %%PET_STATE_JSON%%;
+        const socket = io();
+
+        function escapeHtml(str) {
+            return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+        }
+
+        function showSpin() {
+            document.getElementById('spin-screen').classList.remove('hidden');
+            document.getElementById('main-screen').classList.add('hidden');
+            reroll();
+        }
+
+        function tierBadge(tier) {
+            if (tier === 'legendary') return ' <span class="badge badge-warning">⭐ Huyền thoại</span>';
+            if (tier === 'mythical') return ' <span class="badge badge-secondary">✨ Bí ẩn</span>';
+            return '';
+        }
+
+        function tierStyle(tier) {
+            if (tier === 'legendary') return ' ring-2 ring-warning';
+            if (tier === 'mythical') return ' ring-2 ring-secondary';
+            return '';
+        }
+
+        function reroll() {
+            const cards = document.getElementById('spin-cards');
+            cards.innerHTML = '<div class="col-span-full text-center"><span class="loading loading-spinner loading-lg"></span></div>';
+            fetch('/pet/spin')
+                .then(function (r) { return r.json(); })
+                .then(function (res) {
+                    cards.innerHTML = '';
+                    (res.slots || []).forEach(function (p) {
+                        const col = document.createElement('div');
+                        col.className = 'card bg-base-100 shadow-xl' + tierStyle(p.tier);
+                        col.innerHTML =
+                            '<figure class="px-8 pt-8"><img src="' + p.sprite + '" alt="' + escapeHtml(p.name) + '" class="w-32 h-32 object-contain"></figure>' +
+                            '<div class="card-body items-center text-center">' +
+                            '<h2 class="card-title">' + escapeHtml(p.name) + tierBadge(p.tier) + '</h2>' +
+                            '<button class="btn btn-primary btn-block" onclick="adopt(' + p.species_id + ')">Nhận</button>' +
+                            '</div>';
+                        cards.appendChild(col);
+                    });
+                });
+        }
+
+        function adopt(id) {
+            fetch('/pet/adopt', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'species_id=' + encodeURIComponent(id)
+            }).then(function (r) { return r.json(); }).then(function (res) {
+                if (res.ok) { location.reload(); }
+                else { alert(res.error || 'Có lỗi xảy ra'); reroll(); }
+            });
+        }
+
+        function setBar(id, baseClass, value, gray) {
+            const el = document.getElementById(id);
+            el.value = value;
+            el.className = 'progress ' + (gray ? 'progress-neutral' : baseClass);
+        }
+
+        function renderMain(s) {
+            IN_CENTER = !!s.in_center;
+            document.getElementById('pet-sprite').src = s.sprite;
+            const sick = s.sick || s.health < 30;
+            document.getElementById('pet-sprite').style.filter = sick ? 'grayscale(80%)' : 'none';
+            document.getElementById('pet-name').innerText = s.name;
+            document.getElementById('pet-age').innerText = 'Tuổi: ' + s.age_text;
+            document.getElementById('player-name').innerText = s.player_name;
+
+            const gray = IN_CENTER;
+            setBar('hunger-bar', 'progress-error', s.hunger, gray);
+            setBar('happiness-bar', 'progress-warning', s.happiness, gray);
+            setBar('energy-bar', 'progress-info', s.energy, gray);
+            setBar('health-bar', 'progress-success', s.health, gray);
+            document.getElementById('hunger-txt').innerText = s.hunger + '/100';
+            document.getElementById('happiness-txt').innerText = s.happiness + '/100';
+            document.getElementById('energy-txt').innerText = s.energy + '/100';
+            document.getElementById('health-txt').innerText = s.health + '/100';
+
+            const badge = document.getElementById('sick-badge');
+            if (s.sick) { badge.classList.remove('hidden'); } else { badge.classList.add('hidden'); }
+
+            const centerStatus = document.getElementById('center-status');
+            const centerBtn = document.getElementById('center-btn');
+            const actionBtns = ['btn-feed', 'btn-play', 'btn-sleep', 'btn-heal', 'btn-clean'];
+            if (gray) {
+                centerStatus.classList.remove('hidden');
+                centerStatus.innerText = '🏥 Đang ở Trung Tâm — Đã gửi ' + (s.center_text || '');
+                centerBtn.innerText = '📥 Nhận thú về';
+                actionBtns.forEach(function (id) { document.getElementById(id).disabled = true; });
+            } else {
+                centerStatus.classList.add('hidden');
+                centerBtn.innerText = '🏥 Gửi vào Trung Tâm';
+                actionBtns.forEach(function (id) { document.getElementById(id).disabled = false; });
+            }
+        }
+
+        function showMain(s) {
+            document.getElementById('spin-screen').classList.add('hidden');
+            document.getElementById('main-screen').classList.remove('hidden');
+            renderMain(s);
+        }
+
+        let IN_CENTER = false;
+
+        function doAction(action) {
+            socket.emit('pet_action', { action: action });
+            if (action === 'sleep') { showOverlay('💤'); }
+            if (action === 'feed') { showOverlay('🍖'); }
+        }
+
+        function showOverlay(emoji) {
+            const ov = document.getElementById('sprite-overlay');
+            ov.innerText = emoji;
+            ov.classList.remove('hidden');
+            if (window.__overlayTimer) { clearTimeout(window.__overlayTimer); }
+            window.__overlayTimer = setTimeout(function () { ov.classList.add('hidden'); ov.innerText = ''; }, 2000);
+        }
+
+        function toggleCenter() {
+            socket.emit('pet_action', { action: IN_CENTER ? 'receive' : 'center' });
+        }
+
+        function openRelease() {
+            document.getElementById('release-modal').showModal();
+        }
+
+        function closeRelease() {
+            document.getElementById('release-modal').close();
+        }
+
+        function confirmRelease() {
+            document.getElementById('release-modal').close();
+            socket.emit('pet_action', { action: 'release' });
+        }
+
+        socket.on('pet_update', function (data) { renderMain(data); });
+
+        socket.on('pet_released', function () { showSpin(); });
+
+        if (PET_STATE !== null) { showMain(PET_STATE); } else { showSpin(); }
+    </script>
+
+    <div class="fixed bottom-2 right-3 text-xs text-neutral-400">%%VERSION%%</div>
+</body>
+</html>
+"""
+
+# ============================================================
+# ROUTES & SOCKET EVENTS
+# ============================================================
+
+def pet_index():
+    ip = request.remote_addr
+    pets = load_pets()
+    pet = pets.get(ip)
+    pet_state_json = 'null'
+    if pet is not None:
+        run_catch_up(pet)
+        save_pets(pets)
+        pet_state_json = json.dumps(pet_to_client(pet, ip), ensure_ascii=False)
+
+    player_name = resolve_player_name(ip)
+
+    html = (HTML_PAGE
+            .replace('%%VERSION%%', VERSION)
+            .replace('%%PLAYER_NAME%%', player_name)
+            .replace('%%PET_STATE_JSON%%', pet_state_json))
+    return html
+
+def pet_adopt():
+    ip = request.remote_addr
+    pets = load_pets()
+    if ip in pets:
+        return jsonify({'ok': False, 'error': 'Bạn đã có pet rồi'})
+    try:
+        species_id = int(request.form.get('species_id', ''))
+    except (TypeError, ValueError):
+        return jsonify({'ok': False, 'error': 'Loài không hợp lệ'})
+    if species_id not in BASE_FORMS:
+        return jsonify({'ok': False, 'error': 'Loài không hợp lệ'})
+
+    tier = 'mythical' if species_id in MYTHICAL_IDS else ('legendary' if species_id in LEGENDARY_IDS else 'normal')
+    if tier != 'normal':
+        legendary = load_legendary()
+        if str(species_id) in legendary:
+            return jsonify({'ok': False, 'error': 'Pokémon này đã có chủ!'}), 409
+        legendary[str(species_id)] = ip
+        save_legendary(legendary)
+
+    pets[ip] = new_pet(species_id)
+    save_pets(pets)
+    return jsonify({'ok': True})
+
+def serve_sprite(filename):
+    sprites_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'sprites')
+    return send_from_directory(sprites_dir, filename)
+
+def pet_spin():
+    return jsonify({'slots': generate_spin()})
+
+def handle_pet_action(data):
+    ip = request.remote_addr
+    pets = load_pets()
+    pet = pets.get(ip)
+    if pet is None:
+        return
+    action = data.get('action')
+
+    if action == 'release':
+        species_id = pet.get('species_id')
+        del pets[ip]
+        save_pets(pets)
+        if species_id in LEGENDARY_IDS or species_id in MYTHICAL_IDS:
+            legendary = load_legendary()
+            if legendary.get(str(species_id)) == ip:
+                del legendary[str(species_id)]
+                save_legendary(legendary)
+        emit('pet_released', {}, to=request.sid)
+        return
+
+    if action == 'center':
+        pet['in_center'] = True
+        pet['center_since'] = time.time()
+        pet['last_updated'] = time.time()
+        save_pets(pets)
+        emit('pet_update', pet_to_client(pet, ip), to=request.sid)
+        return
+
+    if action == 'receive':
+        pet['in_center'] = False
+        pet['center_since'] = None
+        pet['last_updated'] = time.time()
+        save_pets(pets)
+        emit('pet_update', pet_to_client(pet, ip), to=request.sid)
+        return
+
+    run_catch_up(pet)
+    if action not in ACTIONS:
+        return
+    if pet.get('in_center'):
+        return
+    apply_action(pet, action)
+    pet['last_updated'] = time.time()
+    save_pets(pets)
+    emit('pet_update', pet_to_client(pet, ip), to=request.sid)
+
+def register(app, socketio_instance):
+    global socketio
+    socketio = socketio_instance
+
+    app.add_url_rule('/pet', 'pet_index', pet_index, methods=['GET'])
+    app.add_url_rule('/pet/adopt', 'pet_adopt', pet_adopt, methods=['POST'])
+    app.add_url_rule('/pet/spin', 'pet_spin', pet_spin, methods=['GET'])
+    app.add_url_rule('/static/sprites/<filename>', 'pet_sprites', serve_sprite, methods=['GET'])
+
+    socketio_instance.on_event('pet_action', handle_pet_action)
