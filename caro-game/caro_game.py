@@ -10,7 +10,7 @@ socketio = None
 
 # --- TRẠNG THÁI GAME ---
 BOARD_SIZE = 20 # BẠN CÓ THỂ ĐỔI THÀNH SỐ BẤT KỲ (15, 20, 25...)
-VERSION = "v3.1.11"
+VERSION = "v3.1.12"
 COUNTDOWN_SECONDS = 8
 IDLE_SECONDS = 180
 IDLE_CHECK_INTERVAL = 10
@@ -19,7 +19,7 @@ TURN_SECONDS = 40
 # --- CONFIG ---
 # Bật (True) để cho phép cùng 1 IP cầm cả X và O (dùng khi self-test).
 # Tắt (False) để chặn trùng IP như bình thường.
-ALLOW_SAME_IP = False
+ALLOW_SAME_IP = True
 
 def create_empty_board():
     return [['' for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
@@ -66,6 +66,7 @@ HTML_PAGE = f"""
     <!-- Tailwind CSS + DaisyUI CDN -->
     <!-- Nếu máy LAN không có Internet, host local: tải tailwindcss và daisyui về thư mục static/ -->
     <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
         #board {{
             display: grid;
@@ -474,68 +475,58 @@ HTML_PAGE = f"""
             const prevBoard = lastBoardState ? lastBoardState.board : null;
             lastBoardState = {{ board: boardData, lastMove: lastMove, winCells: winCells, threatCells: threatCells }};
 
-            // Lần đầu: render toàn bộ
+            // Cập nhật nội dung các ô thay đổi (dùng classList, không set className)
             if (!prevBoard) {{
                 for (let r = 0; r < size; r++) {{
                     for (let c = 0; c < size; c++) {{
                         const v = boardData[r][c];
                         const cell = cells[r][c];
                         cell.innerText = v;
-                        cell.className = 'cell ' + v;
+                        cell.classList.remove('X', 'O');
+                        if (v) cell.classList.add(v);
                     }}
                 }}
             }} else {{
-                // Chỉ update các ô thay đổi giữa board cũ và mới
                 for (let r = 0; r < size; r++) {{
                     for (let c = 0; c < size; c++) {{
                         if (boardData[r][c] !== prevBoard[r][c]) {{
                             const v = boardData[r][c];
                             const cell = cells[r][c];
                             cell.innerText = v;
-                            cell.className = 'cell ' + v;
+                            cell.classList.remove('X', 'O');
+                            if (v) cell.classList.add(v);
                         }}
                     }}
                 }}
             }}
 
-            // Xoá last-move ở ô cũ (nếu có)
+            // Xoá last-move ở ô cũ
             if (prevLastMove && (!lastMove || prevLastMove.r !== lastMove.r || prevLastMove.c !== lastMove.c)) {{
                 cells[prevLastMove.r][prevLastMove.c].classList.remove('last-move');
             }}
-
-            // Thêm last-move ở ô mới (nếu có)
+            // Thêm last-move ở ô mới
             if (lastMove) {{
                 cells[lastMove.r][lastMove.c].classList.add('last-move');
             }}
 
-            // Cập nhật threat cells: thêm class mới, xoá class cũ
+            // Threat cells
             const threatSet = new Set((threatCells || []).map(pt => pt[0] + ',' + pt[1]));
             const prevThreatSet = new Set(prevThreat.map(pt => pt[0] + ',' + pt[1]));
             (threatCells || []).forEach(pt => {{
-                if (!prevThreatSet.has(pt[0] + ',' + pt[1])) {{
-                    const cell = cells[pt[0]][pt[1]];
-                    if (!cell.classList.contains('threat-cell')) cell.classList.add('threat-cell');
-                }}
+                if (!prevThreatSet.has(pt[0] + ',' + pt[1])) cells[pt[0]][pt[1]].classList.add('threat-cell');
             }});
             prevThreat.forEach(pt => {{
-                if (!threatSet.has(pt[0] + ',' + pt[1])) {{
-                    cells[pt[0]][pt[1]].classList.remove('threat-cell');
-                }}
+                if (!threatSet.has(pt[0] + ',' + pt[1])) cells[pt[0]][pt[1]].classList.remove('threat-cell');
             }});
 
-            // Cập nhật win cells
+            // Win cells
             const winSet = new Set((winCells || []).map(pt => pt[0] + ',' + pt[1]));
             const prevWinSet = new Set(prevWin.map(pt => pt[0] + ',' + pt[1]));
             (winCells || []).forEach(pt => {{
-                if (!prevWinSet.has(pt[0] + ',' + pt[1])) {{
-                    const cell = cells[pt[0]][pt[1]];
-                    if (!cell.classList.contains('win-cell')) cell.classList.add('win-cell');
-                }}
+                if (!prevWinSet.has(pt[0] + ',' + pt[1])) cells[pt[0]][pt[1]].classList.add('win-cell');
             }});
             prevWin.forEach(pt => {{
-                if (!winSet.has(pt[0] + ',' + pt[1])) {{
-                    cells[pt[0]][pt[1]].classList.remove('win-cell');
-                }}
+                if (!winSet.has(pt[0] + ',' + pt[1])) cells[pt[0]][pt[1]].classList.remove('win-cell');
             }});
         }}
 
