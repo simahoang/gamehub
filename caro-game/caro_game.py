@@ -10,7 +10,7 @@ socketio = None
 
 # --- TRẠNG THÁI GAME ---
 BOARD_SIZE = 20 # BẠN CÓ THỂ ĐỔI THÀNH SỐ BẤT KỲ (15, 20, 25...)
-VERSION = "v3.0"
+VERSION = "v3.0.2"
 COUNTDOWN_SECONDS = 8
 IDLE_SECONDS = 180
 IDLE_CHECK_INTERVAL = 10
@@ -118,6 +118,16 @@ HTML_PAGE = f"""
         .piece-o {{ color: oklch(var(--p)); font-weight: bold; }}
         .piece-spec {{ color: oklch(var(--bc) / 0.5); }}
         #version {{ color: oklch(var(--bc) / 0.3); }}
+        @keyframes timer-urgent {{
+            0%, 100% {{ opacity: 1; transform: scale(1); }}
+            50% {{ opacity: 0.4; transform: scale(1.1); }}
+        }}
+        .timer-urgent {{
+            animation: timer-urgent 0.6s ease-in-out infinite;
+            color: #e74c3c !important;
+            font-size: 1.3em !important;
+            font-weight: 900 !important;
+        }}
     </style>
 </head>
 <body class="bg-base-200 min-h-screen">
@@ -150,6 +160,12 @@ HTML_PAGE = f"""
                         <button id="sit-o-btn" onclick="sit('O')" style="display:none;" class="btn btn-sm">Ngồi O</button>
                         <button id="stand-btn" onclick="stand()" style="display:none;" class="btn btn-sm btn-ghost">Đứng lên</button>
                     </div>
+                </div>
+
+                <div class="flex justify-center items-center gap-4 my-2 text-base-content/30">
+                    <div class="h-px flex-1 bg-base-300"></div>
+                    <span class="text-2xl">🪑🪑</span>
+                    <div class="h-px flex-1 bg-base-300"></div>
                 </div>
 
                 <div id="board-wrapper" style="overflow: auto; max-width: 100%;" class="card bg-base-100 shadow-xl p-4 mb-4">
@@ -189,6 +205,7 @@ HTML_PAGE = f"""
         let currentRoom = '';
         let lastBoardState = null;
         let turnTimerSeconds = 0;
+        let roomTurnSeconds = 40;
 
         function escapeHtml(str) {{
             return (str || '').replace(/&/g, '&amp;')
@@ -282,7 +299,8 @@ HTML_PAGE = f"""
             myName = data.player_name || 'Unknown';
             currentTurn = data.turn;
             updateRole();
-            const ts = data.turn_seconds || 40;
+            roomTurnSeconds = data.turn_seconds || 40;
+            const ts = roomTurnSeconds;
             document.getElementById('roomTitle').innerText = 'Đang chơi tại: ' + currentRoom + ' (' + ts + 's/nước)';
             const chatContainer = document.getElementById('chat-messages');
             chatContainer.innerHTML = '';
@@ -346,7 +364,12 @@ HTML_PAGE = f"""
                 turnTimerSeconds = data.seconds;
                 t.style.display = 'inline-block';
                 t.innerText = '⏱ còn ' + data.seconds + 's';
-                t.style.color = data.seconds <= 10 ? 'red' : '#555';
+                const urgent = data.seconds <= Math.min(10, roomTurnSeconds * 0.25);
+                if (urgent) {{
+                    t.classList.add('timer-urgent');
+                }} else {{
+                    t.classList.remove('timer-urgent');
+                }}
             }} else {{
                 resetTurnTimer();
             }}
@@ -387,7 +410,7 @@ HTML_PAGE = f"""
             turnTimerSeconds = 0;
             const t = document.getElementById('turn-timer');
             t.innerText = '';
-            t.style.color = '';
+            t.classList.remove('timer-urgent');
             t.style.display = 'none';
         }}
 
@@ -430,29 +453,58 @@ HTML_PAGE = f"""
         }}
 
         function updateBoard(boardData, lastMove, winCells, threatCells) {{
+            const prevThreat = lastBoardState.threatCells || [];
+            const prevWin = lastBoardState.winCells || [];
+            const prevLastMove = lastBoardState.lastMove;
             lastBoardState = {{ board: boardData, lastMove: lastMove, winCells: winCells, threatCells: threatCells }};
-            for (let r = 0; r < size; r++) {{
-                for (let c = 0; c < size; c++) {{
-                    const cell = document.getElementById(`cell-${{r}}-${{c}}`);
-                    cell.innerText = boardData[r][c];
-                    
-                    let className = 'cell ' + boardData[r][c];
-                    
-                    if (lastMove && lastMove.r === r && lastMove.c === c) {{
-                        className += ' last-move';
-                    }}
-                    
-                    if (winCells && winCells.some(pt => pt[0] === r && pt[1] === c)) {{
-                        className += ' win-cell';
-                    }}
 
-                    if (threatCells && threatCells.some(pt => pt[0] === r && pt[1] === c)) {{
-                        className += ' threat-cell';
-                    }}
-                    
-                    cell.className = className;
-                }}
+            // Xoá last-move ở ô cũ (nếu có)
+            if (prevLastMove && (!lastMove || prevLastMove.r !== lastMove.r || prevLastMove.c !== lastMove.c)) {{
+                const cell = document.getElementById('cell-' + prevLastMove.r + '-' + prevLastMove.c);
+                if (cell) cell.classList.remove('last-move');
             }}
+
+            // Chỉ update ô vừa đánh (nếu có)
+            if (lastMove) {{
+                const r = lastMove.r, c = lastMove.c;
+                const cell = document.getElementById('cell-' + r + '-' + c);
+                cell.innerText = boardData[r][c];
+                cell.classList.add('last-move');
+                if (winCells && winCells.some(pt => pt[0] === r && pt[1] === c)) cell.classList.add('win-cell');
+                if (threatCells && threatCells.some(pt => pt[0] === r && pt[1] === c)) cell.classList.add('threat-cell');
+            }}
+
+            // Cập nhật threat cells: thêm class mới, xoá class cũ
+            const threatSet = new Set((threatCells || []).map(pt => pt[0] + ',' + pt[1]));
+            const prevThreatSet = new Set(prevThreat.map(pt => pt[0] + ',' + pt[1]));
+            (threatCells || []).forEach(pt => {{
+                if (!prevThreatSet.has(pt[0] + ',' + pt[1])) {{
+                    const cell = document.getElementById('cell-' + pt[0] + '-' + pt[1]);
+                    if (cell && !cell.classList.contains('threat-cell')) cell.classList.add('threat-cell');
+                }}
+            }});
+            prevThreat.forEach(pt => {{
+                if (!threatSet.has(pt[0] + ',' + pt[1])) {{
+                    const cell = document.getElementById('cell-' + pt[0] + '-' + pt[1]);
+                    if (cell) cell.classList.remove('threat-cell');
+                }}
+            }});
+
+            // Cập nhật win cells
+            const winSet = new Set((winCells || []).map(pt => pt[0] + ',' + pt[1]));
+            const prevWinSet = new Set(prevWin.map(pt => pt[0] + ',' + pt[1]));
+            (winCells || []).forEach(pt => {{
+                if (!prevWinSet.has(pt[0] + ',' + pt[1])) {{
+                    const cell = document.getElementById('cell-' + pt[0] + '-' + pt[1]);
+                    if (cell) cell.classList.add('win-cell');
+                }}
+            }});
+            prevWin.forEach(pt => {{
+                if (!winSet.has(pt[0] + ',' + pt[1])) {{
+                    const cell = document.getElementById('cell-' + pt[0] + '-' + pt[1]);
+                    if (cell) cell.classList.remove('win-cell');
+                }}
+            }});
         }}
 
         function updateTurn(turn) {{
