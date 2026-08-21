@@ -10,7 +10,7 @@ socketio = None
 
 # --- TRẠNG THÁI GAME ---
 BOARD_SIZE = 20 # BẠN CÓ THỂ ĐỔI THÀNH SỐ BẤT KỲ (15, 20, 25...)
-VERSION = "v2.7"
+VERSION = "v3.0"
 COUNTDOWN_SECONDS = 8
 IDLE_SECONDS = 180
 IDLE_CHECK_INTERVAL = 10
@@ -24,7 +24,7 @@ ALLOW_SAME_IP = False
 def create_empty_board():
     return [['' for _ in range(BOARD_SIZE)] for _ in range(BOARD_SIZE)]
 
-# Mở sẵn 4 phòng cố định với thời gian mỗi nước khác nhau (turn_seconds)
+# Mở sẵn 6 phòng cố định với thời gian mỗi nước khác nhau (turn_seconds)
 rooms = {
     'Tiêu chuẩn 1':  {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 45},
     'Tiêu chuẩn 2': {'board': create_empty_board(), 'players': {}, 'turn': 'X', 'last_move': None, 'win_cells': None, 'threat_cells': [], 'game_active': False, 'game_over': False, 'countdown_seconds': 0, 'chat_history': [], 'turn_deadline': None, 'turn_seconds': 45},
@@ -57,32 +57,17 @@ def resolve_player_name(ip):
 # --- HTML & GIAO DIỆN WEB ---
 HTML_PAGE = f"""
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="vi" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Cờ Caro LAN - Đa Phòng</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <!-- Tailwind CSS + DaisyUI CDN -->
+    <!-- Nếu máy LAN không có Internet, host local: tải tailwindcss và daisyui về thư mục static/ -->
+    <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css" rel="stylesheet" type="text/css" />
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body {{ font-family: Arial, sans-serif; text-align: center; background: #f0f0f0; margin: 0; padding: 20px; }}
-        h1 {{ color: #333; margin-bottom: 5px; }}
-        #info {{ font-size: 18px; font-weight: bold; margin-bottom: 15px; color: #555; }}
-        #role {{ font-size: 16px; color: #888; margin-bottom: 20px; }}
-        #result {{ font-size: 20px; font-weight: bold; margin-bottom: 10px; color: green; }}
-        #turn-timer {{ font-size: 18px; font-weight: bold; margin-bottom: 10px; color: #555; display: none; }}
-        #seat-panel {{ display: flex; flex-direction: column; gap: 6px; margin: 5px auto 15px auto; max-width: 400px; }}
-        .seat-row {{ display: flex; justify-content: center; align-items: center; gap: 10px; }}
-        .seat-label {{ font-weight: bold; color: #444; }}
-        .seat-row button {{ padding: 5px 14px; font-size: 14px; }}
-        
-        /* Giao diện sảnh chờ */
-        #lobby-wrapper {{ display: flex; justify-content: center; margin-top: 50px; }}
-        .lobby-box {{ background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); width: 300px; }}
-        .lobby-box h3 {{ margin-top: 0; color: #444; border-bottom: 2px solid #eee; padding-bottom: 10px; }}
-        
-        #game {{ display: none; }} /* Ẩn game lúc mới vào */
-
-        /* Bàn cờ */
         #board {{
             display: grid;
             grid-template-columns: repeat({BOARD_SIZE}, 30px);
@@ -94,7 +79,7 @@ HTML_PAGE = f"""
         }}
         .cell {{
             width: 30px; height: 30px;
-            background: #EEDD82;
+            background: oklch(var(--wa) / 0.3);
             border: 1px solid #000;
             box-sizing: border-box;
             display: flex; justify-content: center; align-items: center;
@@ -103,163 +88,96 @@ HTML_PAGE = f"""
             user-select: none;
             transition: background 0.2s;
         }}
-        .cell:hover {{ background: #dfc85a; }}
-        .X {{ color: red; }}
-        .O {{ color: blue; }}
-        
-        /* HIỆU ỨNG TÔ ĐẬM Ô VỪA ĐÁNH (XANH LÁ) */
+        .cell:hover {{ background: oklch(var(--wa) / 0.5); }}
+        .X {{ color: oklch(var(--er)); }}
+        .O {{ color: oklch(var(--p)); }}
         .last-move {{
-            background: #7bed9f !important; /* Xanh lá */
+            background: oklch(var(--su) / 0.4) !important;
             box-shadow: inset 0 0 8px rgba(0,0,0,0.4);
         }}
-
-        /* HIỆU ỨNG TÔ ĐẬM ĐƯỜNG CHIẾN THẮNG (VÀNG ĐẬM) */
         .win-cell {{
-            background: #f1c40f !important; /* Vàng */
+            background: oklch(var(--wa)) !important;
+            color: oklch(var(--wac));
+            font-weight: 900;
             box-shadow: inset 0 0 12px rgba(0,0,0,0.6);
-            color: #fff; 
         }}
-
-        /* HIỆU ỨNG IN ĐẬM ĐƯỜNG NGUY HIỂM */
         .threat-cell {{ font-weight: 900 !important; }}
-        
-        /* Nút bấm */
-        button {{ padding: 10px 20px; font-size: 16px; cursor: pointer; border-radius: 5px; border: none; background: #007bff; color: white; transition: 0.2s; }}
-        button:hover {{ background: #0056b3; }}
-        
-        .btn-room {{ background: #28a745; margin-top: 10px; font-weight: bold; width: 100%; }}
-        .btn-room:hover {{ background: #218838; }}
-        
-        .btn-gray {{ background: #6c757d; }}
-        .btn-gray:hover {{ background: #5a6268; }}
-        
-        .game-controls {{ display: flex; justify-content: center; gap: 10px; max-width: 400px; margin: 20px auto 0 auto; }}
-        
-        #version {{ position: fixed; bottom: 10px; right: 15px; font-size: 12px; color: #999; z-index: 100; }}
-        
-        #player-list {{
-            position: fixed;
-            top: 100px;
-            right: 20px;
-            background: white;
-            border: 1px solid #ddd;
+        .chat-msg {{
+            margin-bottom: 6px;
+            padding: 6px 10px;
+            background: oklch(var(--b2));
             border-radius: 8px;
-            padding: 15px;
-            min-width: 180px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            text-align: left;
-            z-index: 99;
-        }}
-        #player-list h4 {{ margin-top: 0; color: #444; border-bottom: 1px solid #eee; padding-bottom: 8px; }}
-        .player-item {{ padding: 4px 0; font-size: 14px; }}
-        .player-item .piece-x {{ color: red; font-weight: bold; }}
-        .player-item .piece-o {{ color: blue; font-weight: bold; }}
-        .player-item .piece-spec {{ color: #999; }}
-    #chat-box {{
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            width: 250px;
-            background: white;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            z-index: 100;
-            display: none;
-        }}
-        #chat-messages {{
-            height: 200px;
-            overflow-y: auto;
-            padding: 10px;
-            font-size: 13px;
-            text-align: left;
-            border-bottom: 1px solid #eee;
-        }}
-        #chat-messages .chat-msg {{
-            margin-bottom: 5px;
             word-break: break-word;
         }}
-        #chat-messages .chat-name {{
+        .chat-name {{
             font-weight: bold;
-            color: #007bff;
+            color: oklch(var(--p));
         }}
-        #chat-input-area {{
-            display: flex;
-            padding: 5px;
-        }}
-        #chat-input {{
-            flex: 1;
-            padding: 6px;
-            font-size: 13px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            outline: none;
-        }}
-        #chat-input-area button {{
-            padding: 6px 10px;
-            font-size: 12px;
-            margin-left: 5px;
-            background: #007bff;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }}
+        .player-item {{ padding: 4px 0; font-size: 14px; }}
+        .piece-x {{ color: oklch(var(--er)); font-weight: bold; }}
+        .piece-o {{ color: oklch(var(--p)); font-weight: bold; }}
+        .piece-spec {{ color: oklch(var(--bc) / 0.5); }}
+        #version {{ color: oklch(var(--bc) / 0.3); }}
     </style>
 </head>
-<body>
-    <h1>Cờ Caro Mạng LAN</h1>
+<body class="bg-base-200 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <!-- MÀN HÌNH CHỌN PHÒNG -->
+        <div id="lobby-wrapper">
+            <div class="card bg-base-100 shadow-xl p-8 max-w-md mx-auto">
+                <h3 class="text-2xl font-bold mb-2">🏠 Danh sách phòng</h3>
+                <p class="text-sm text-base-content/60 mb-4">Bấm vào để vào chơi ngay</p>
+                <div id="room-list"></div>
+            </div>
+        </div>
 
-    <!-- MÀN HÌNH CHỌN PHÒNG -->
-    <div id="lobby-wrapper">
-        <div class="lobby-box">
-            <h3>🏠 Danh sách phòng</h3>
-            <p style="font-size: 14px; color: #666;">Bấm vào để vào chơi ngay</p>
-            <div id="room-list"></div>
+        <!-- MÀN HÌNH CHƠI GAME -->
+        <div id="game" style="display: none;">
+            <div class="max-w-4xl mx-auto">
+                <h2 id="roomTitle" class="text-2xl font-bold text-error mb-1"></h2>
+                <div id="info" class="text-lg font-semibold text-base-content mb-2">Đang kết nối...</div>
+                <div id="result" class="text-xl font-bold text-success mb-2"></div>
+                <div id="turn-timer" class="text-lg text-warning mb-2"></div>
+                <div id="role" class="text-base text-base-content/70 mb-4"></div>
+
+                <div id="seat-panel" class="card bg-base-100 shadow p-4 mb-4">
+                    <div style="display: flex; flex-direction: row; justify-content: center; align-items: center; gap: 12px; flex-wrap: wrap;">
+                        <span class="badge badge-error font-bold">X</span>
+                        <span id="seat-x-name">Trống</span>
+                        <button id="sit-x-btn" onclick="sit('X')" style="display:none;" class="btn btn-sm">Ngồi X</button>
+                        <span class="badge badge-primary font-bold">O</span>
+                        <span id="seat-o-name">Trống</span>
+                        <button id="sit-o-btn" onclick="sit('O')" style="display:none;" class="btn btn-sm">Ngồi O</button>
+                        <button id="stand-btn" onclick="stand()" style="display:none;" class="btn btn-sm btn-ghost">Đứng lên</button>
+                    </div>
+                </div>
+
+                <div id="board-wrapper" style="overflow: auto; max-width: 100%;" class="card bg-base-100 shadow-xl p-4 mb-4">
+                    <div id="board"></div>
+                </div>
+
+                <div class="flex justify-center gap-3 mt-4">
+                    <button id="surrender-btn" onclick="surrender()" style="display: none;" class="btn btn-error">🏳️ Đầu Hàng</button>
+                    <button onclick="leaveRoom()" class="btn btn-ghost">🚪 Rời Phòng</button>
+                </div>
+            </div>
         </div>
     </div>
 
-    <!-- MÀN HÌNH CHƠI GAME -->
-    <div id="game">
-        <h2 id="roomTitle" style="color: #d9534f; margin-top: 0;"></h2>
-        <div id="info">Đang kết nối...</div>
-        <div id="result"></div>
-        <div id="turn-timer"></div>
-        <div id="role"></div>
-        <div id="seat-panel">
-            <div class="seat-row">
-                <span class="seat-label">Ghế X:</span> <span id="seat-x-name">Trống</span>
-                <button id="sit-x-btn" onclick="sit('X')" style="display:none;">Ngồi X</button>
-            </div>
-            <div class="seat-row">
-                <span class="seat-label">Ghế O:</span> <span id="seat-o-name">Trống</span>
-                <button id="sit-o-btn" onclick="sit('O')" style="display:none;">Ngồi O</button>
-            </div>
-            <div class="seat-row">
-                <button id="stand-btn" onclick="stand()" style="display:none;">Đứng lên</button>
-            </div>
-        </div>
-        <div id="board-wrapper" style="overflow: auto; max-width: 100%;">
-            <div id="board"></div>
-        </div>
-        <div class="game-controls">
-            <button id="surrender-btn" onclick="surrender()" style="display: none;">🏳️ Đầu Hàng</button>
-            <button class="btn-gray" onclick="leaveRoom()">🚪 Rời Phòng</button>
+    <div id="chat-box" class="card bg-base-100 shadow fixed bottom-4 right-4 w-72 z-50" style="display: none;">
+        <div id="chat-messages" class="h-48 overflow-y-auto p-3 text-sm border-b border-base-300"></div>
+        <div id="chat-input-area" class="flex p-2 gap-2">
+            <input type="text" id="chat-input" placeholder="Nhập tin nhắn..." maxlength="200" onkeydown="if(event.key==='Enter') sendChat()" class="input input-bordered input-sm flex-1">
+            <button onclick="sendChat()" class="btn btn-primary btn-sm">Gửi</button>
         </div>
     </div>
 
-    <div id="chat-box">
-        <div id="chat-messages"></div>
-        <div id="chat-input-area">
-            <input type="text" id="chat-input" placeholder="Nhập tin nhắn..." maxlength="200" onkeydown="if(event.key==='Enter') sendChat()">
-            <button onclick="sendChat()">Gửi</button>
-        </div>
-    </div>
-
-    <div id="player-list" style="display: none;">
-        <h4>👥 Người chơi</h4>
+    <div id="player-list" class="card bg-base-100 shadow fixed top-24 right-4 w-48 z-40 p-4" style="display: none;">
+        <h4 class="font-bold text-base-content mb-2 pb-2 border-b border-base-300">👥 Người chơi</h4>
         <div id="player-list-content"></div>
     </div>
+
+    <div id="version" class="text-xs fixed bottom-2 right-4 z-50">{VERSION}</div>
 
     <script>
         const socket = io();
@@ -316,20 +234,43 @@ HTML_PAGE = f"""
             const list = document.getElementById('room-list');
             list.innerHTML = '';
             (rooms || []).forEach(r => {{
-                let label;
-                if (r.seated === 0) label = 'Trống';
-                else if (r.seated === 1) label = 'Đang đợi';
-                else label = 'Đầy';
+                let label, badgeClass;
+                if (r.seated === 0) {{ label = 'Trống'; badgeClass = 'badge-success'; }}
+                else if (r.seated === 1) {{ label = 'Đang đợi'; badgeClass = 'badge-warning'; }}
+                else {{ label = 'Đầy'; badgeClass = 'badge-error'; }}
                 const ts = r.turn_seconds || 40;
                 let icon = '🕐';
                 if (ts <= 15) icon = '⚡';
                 else if (ts <= 30) icon = '🔥';
                 else if (ts >= 120) icon = '🐢';
+
+                const card = document.createElement('div');
+                card.className = 'card bg-base-200 shadow-sm p-4 mb-3';
+
+                const header = document.createElement('div');
+                header.className = 'flex items-center justify-between mb-2';
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'font-bold text-lg';
+                nameSpan.innerText = r.room;
+                const badge = document.createElement('span');
+                badge.className = 'badge ' + badgeClass;
+                badge.innerText = label;
+                header.appendChild(nameSpan);
+                header.appendChild(badge);
+
+                const timeDiv = document.createElement('div');
+                timeDiv.className = 'text-sm text-base-content/70 mb-3';
+                timeDiv.innerText = '(' + ts + 's ' + icon + ')';
+
                 const btn = document.createElement('button');
-                btn.className = 'btn-room';
-                btn.innerText = '🚪 ' + r.room + ' (' + ts + 's ' + icon + ') — ' + label;
+                btn.className = 'btn btn-primary btn-block btn-sm';
+                btn.innerText = 'Vào phòng';
                 btn.onclick = () => joinSpecificRoom(r.room);
-                list.appendChild(btn);
+
+                card.appendChild(header);
+                card.appendChild(timeDiv);
+                card.appendChild(btn);
+                list.appendChild(card);
             }});
         }}
 
@@ -488,7 +429,6 @@ HTML_PAGE = f"""
             }}
         }}
 
-        // Hàm này giờ nhận thêm mảng tọa độ winCells và threatCells
         function updateBoard(boardData, lastMove, winCells, threatCells) {{
             lastBoardState = {{ board: boardData, lastMove: lastMove, winCells: winCells, threatCells: threatCells }};
             for (let r = 0; r < size; r++) {{
@@ -498,17 +438,14 @@ HTML_PAGE = f"""
                     
                     let className = 'cell ' + boardData[r][c];
                     
-                    // Kiểm tra ô vừa đánh
                     if (lastMove && lastMove.r === r && lastMove.c === c) {{
                         className += ' last-move';
                     }}
                     
-                    // Kiểm tra nếu ô này nằm trong chuỗi quân thắng
                     if (winCells && winCells.some(pt => pt[0] === r && pt[1] === c)) {{
                         className += ' win-cell';
                     }}
 
-                    // Kiểm tra nếu ô này nằm trong threat cells
                     if (threatCells && threatCells.some(pt => pt[0] === r && pt[1] === c)) {{
                         className += ' threat-cell';
                     }}
@@ -560,8 +497,6 @@ HTML_PAGE = f"""
         }});
 
         </script>
-
-    <div id="version">{VERSION}</div>
 </body>
 </html>
 """
@@ -926,6 +861,14 @@ def handle_sit(data):
         return
     if player['piece'] != '':
         return
+    # Kiểm tra IP này đã ngồi ở phòng KHÁC chưa (trên toàn bộ rooms)
+    if not ALLOW_SAME_IP:
+        for other_room_id, other_r_data in rooms.items():
+            if other_room_id == room_id:
+                continue
+            for other_sid, other_p in other_r_data['players'].items():
+                if other_p.get('ip') == player.get('ip') and other_p['piece'] in ('X', 'O'):
+                    return
     for sid, p in r_data['players'].items():
         if sid == request.sid:
             continue
@@ -1016,6 +959,11 @@ def handle_move(data):
     
     r_data['players'][request.sid]['last_active'] = time.time()
     row, col = data['row'], data['col']
+    # Validate row/col
+    if not (isinstance(row, int) and isinstance(col, int)):
+        return
+    if not (0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE):
+        return
     if r_data['board'][row][col] == '':
         r_data['board'][row][col] = piece
         r_data['last_move'] = {'r': row, 'c': col}
