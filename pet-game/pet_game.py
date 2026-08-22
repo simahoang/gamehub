@@ -11,7 +11,7 @@ from contextlib import closing
 from flask import request, send_from_directory, jsonify
 from flask_socketio import emit
 
-VERSION = "v1.3"
+VERSION = "v1.4"
 
 # ============================================================
 # DATA (Giữ nguyên từ stub)
@@ -222,7 +222,7 @@ ACTIONS = {
     'heal':   {'health': 30},
 }
 
-_spin_cooldowns = {}  # IP -> timestamp of last spin
+
 
 # ============================================================
 # STORAGE (SQLite)
@@ -902,21 +902,24 @@ def pet_spin():
     ip = request.remote_addr
     now = time.time()
 
-    # Rate-limit: 1 spin / 2 seconds
-    last_spin = _spin_cooldowns.get(ip, 0)
-    if now - last_spin < 2:
-        return jsonify({'slots': [], 'error': 'Quay nhanh quá! Đợi 2 giây nhé.'})
-    _spin_cooldowns[ip] = now
-
     slots = generate_spin()
     species_ids = [s['species_id'] for s in slots]
+
     with get_db() as conn:
+        # Rate-limit + cleanup + INSERT trong cùng 1 transaction
+        conn.execute('BEGIN IMMEDIATE')
+        row = conn.execute('SELECT created_at FROM spin_state WHERE ip = ?', (ip,)).fetchone()
+        if row and now - row[0] < 2:
+            conn.rollback()
+            return jsonify({'slots': [], 'error': 'Quay nhanh quá! Đợi 2 giây nhé.'})
+
         conn.execute('DELETE FROM spin_state WHERE created_at < ?', (now - 120,))
         conn.execute(
             'INSERT OR REPLACE INTO spin_state (ip, species_ids, created_at) VALUES (?, ?, ?)',
             (ip, json.dumps(species_ids), now)
         )
         conn.commit()
+
     return jsonify({'slots': slots})
 
 def handle_pet_action(data):
