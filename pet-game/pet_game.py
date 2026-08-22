@@ -11,7 +11,7 @@ from contextlib import closing
 from flask import request, send_from_directory, jsonify
 from flask_socketio import emit
 
-VERSION = "v1.4"
+VERSION = "v1.4.1"
 
 # ============================================================
 # DATA (Giữ nguyên từ stub)
@@ -222,6 +222,8 @@ ACTIONS = {
     'heal':   {'health': 30},
 }
 
+DAILY_SPIN_LIMIT = 200
+
 
 
 # ============================================================
@@ -253,6 +255,27 @@ def migrate_to_sqlite():
             ip TEXT PRIMARY KEY,
             species_ids TEXT NOT NULL,
             created_at REAL NOT NULL
+        )''')
+
+        # Thêm cột daily_count, daily_reset (Pet v1.4.1)
+        try:
+            conn.execute('ALTER TABLE spin_state ADD COLUMN daily_count INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute('ALTER TABLE spin_state ADD COLUMN daily_reset REAL DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+
+        # Fix NULL values for pre-existing rows (Pet v1.4.1)
+        conn.execute('UPDATE spin_state SET daily_count = 0 WHERE daily_count IS NULL')
+        conn.execute('UPDATE spin_state SET daily_reset = 0 WHERE daily_reset IS NULL')
+
+        # Bảng daily_spins riêng để không bị ảnh hưởng bởi cleanup spin_state (Pet v1.4.1)
+        conn.execute('''CREATE TABLE IF NOT EXISTS daily_spins (
+            ip TEXT PRIMARY KEY,
+            count INTEGER DEFAULT 0,
+            reset_at REAL DEFAULT 0
         )''')
 
         row = conn.execute('SELECT COUNT(*) FROM pets').fetchone()
@@ -906,17 +929,43 @@ def pet_spin():
     species_ids = [s['species_id'] for s in slots]
 
     with get_db() as conn:
-        # Rate-limit + cleanup + INSERT trong cùng 1 transaction
         conn.execute('BEGIN IMMEDIATE')
-        row = conn.execute('SELECT created_at FROM spin_state WHERE ip = ?', (ip,)).fetchone()
-        if row and now - row[0] < 2:
+
+        # --- Daily limit check (dùng bảng daily_spins riêng) ---
+        today_start = int(now // 86400) * 86400
+        row = conn.execute(
+            'SELECT count, reset_at FROM daily_spins WHERE ip = ?', (ip,)
+        ).fetchone()
+
+        daily_count = (row[0] if row[0] is not None else 0) if row else 0
+        daily_reset = (row[1] if row[1] is not None else 0) if row else 0
+
+        if daily_reset < today_start:
+            daily_count = 0
+
+        if daily_count >= DAILY_SPIN_LIMIT:
+            conn.rollback()
+            return jsonify({'slots': [], 'error': f'Đã hết {DAILY_SPIN_LIMIT} lượt quay hôm nay. Quay lại sau nhé!'})
+
+        daily_count += 1
+
+        # --- Rate-limit check (2s) ---
+        row2 = conn.execute('SELECT created_at FROM spin_state WHERE ip = ?', (ip,)).fetchone()
+        if row2 and now - row2[0] < 2:
             conn.rollback()
             return jsonify({'slots': [], 'error': 'Quay nhanh quá! Đợi 2 giây nhé.'})
 
+        # --- Cleanup + INSERT spin_state ---
         conn.execute('DELETE FROM spin_state WHERE created_at < ?', (now - 120,))
         conn.execute(
             'INSERT OR REPLACE INTO spin_state (ip, species_ids, created_at) VALUES (?, ?, ?)',
             (ip, json.dumps(species_ids), now)
+        )
+
+        # --- Update daily count ---
+        conn.execute(
+            'INSERT OR REPLACE INTO daily_spins (ip, count, reset_at) VALUES (?, ?, ?)',
+            (ip, daily_count, today_start)
         )
         conn.commit()
 
