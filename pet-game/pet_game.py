@@ -4,12 +4,14 @@
 import json
 import os
 import random
+import sqlite3
 import time
+from contextlib import closing
 
 from flask import request, send_from_directory, jsonify
 from flask_socketio import emit
 
-VERSION = "v1.0"
+VERSION = "v1.3"
 
 # ============================================================
 # DATA (Giữ nguyên từ stub)
@@ -197,6 +199,11 @@ ENERGY_DECAY = 3.0
 SICK_HEALTH_DECAY = 5.0    # health giảm khi đang ốm
 HEALTH_RECOVER = 2.0       # health hồi khi hết ốm
 
+POOP_AVG_INTERVAL = 3.0       # Trung bình 3h/lần
+POOP_INTERVAL_SPREAD = 1.0    # ±1h random → 2-4h
+POOP_HAPPINESS_PENALTY = 2.0  # -2 happiness/giờ cho mỗi cục phân
+MAX_POOPS = 4                  # Tối đa 4 cục phân hiển thị
+
 START_STATE = {
     'hunger': 100,
     'happiness': 100,
@@ -213,45 +220,96 @@ ACTIONS = {
     'play':   {'happiness': 25, 'energy': -10},
     'sleep':  {'energy': 40, 'health': 5},
     'heal':   {'health': 30},
-    'clean':  {'happiness': 5, 'health': 10},
 }
 
+_spin_cooldowns = {}  # IP -> timestamp of last spin
+
 # ============================================================
-# STORAGE
+# STORAGE (SQLite)
 # ============================================================
 
 socketio = None
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PETS_FILE = os.path.join(BASE_DIR, 'pets.json')
-LEGENDARY_FILE = os.path.join(BASE_DIR, 'legendary.json')
+DB_FILE = os.path.join(BASE_DIR, 'pet_game.db')
 PLAYERS_FILE = os.path.join(BASE_DIR, 'players.json')
 
+def get_db():
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute('PRAGMA journal_mode=WAL;')
+    return closing(conn)
+
+def migrate_to_sqlite():
+    with get_db() as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS pets (
+            ip TEXT PRIMARY KEY,
+            data TEXT NOT NULL
+        )''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS legendary (
+            species_id INTEGER PRIMARY KEY,
+            ip TEXT NOT NULL
+        )''')
+        conn.execute('''CREATE TABLE IF NOT EXISTS spin_state (
+            ip TEXT PRIMARY KEY,
+            species_ids TEXT NOT NULL,
+            created_at REAL NOT NULL
+        )''')
+
+        row = conn.execute('SELECT COUNT(*) FROM pets').fetchone()
+        if row[0] > 0:
+            return
+
+        old_pets_file = os.path.join(BASE_DIR, 'pets.json')
+        old_legendary_file = os.path.join(BASE_DIR, 'legendary.json')
+
+        if os.path.exists(old_pets_file):
+            with open(old_pets_file, 'r', encoding='utf-8') as f:
+                pets = json.load(f)
+            for ip, data in pets.items():
+                conn.execute(
+                    'INSERT OR REPLACE INTO pets (ip, data) VALUES (?, ?)',
+                    (ip, json.dumps(data, ensure_ascii=False))
+                )
+
+        if os.path.exists(old_legendary_file):
+            with open(old_legendary_file, 'r', encoding='utf-8') as f:
+                legendary = json.load(f)
+            for species_id, ip in legendary.items():
+                conn.execute(
+                    'INSERT OR REPLACE INTO legendary (species_id, ip) VALUES (?, ?)',
+                    (int(species_id), ip)
+                )
+
+        conn.commit()
+
 def load_pets():
-    if not os.path.exists(PETS_FILE):
-        return {}
-    try:
-        with open(PETS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return {}
+    with get_db() as conn:
+        rows = conn.execute('SELECT ip, data FROM pets').fetchall()
+    return {ip: json.loads(data) for ip, data in rows}
 
 def save_pets(pets):
-    with open(PETS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(pets, f, ensure_ascii=False, indent=2)
+    with get_db() as conn:
+        conn.executemany(
+            'INSERT OR REPLACE INTO pets (ip, data) VALUES (?, ?)',
+            ((ip, json.dumps(data, ensure_ascii=False)) for ip, data in pets.items())
+        )
+        conn.commit()
 
 def load_legendary():
-    if not os.path.exists(LEGENDARY_FILE):
-        return {}
-    try:
-        with open(LEGENDARY_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return {}
+    with get_db() as conn:
+        rows = conn.execute('SELECT species_id, ip FROM legendary').fetchall()
+    return {str(sid): ip for sid, ip in rows}
 
 def save_legendary(legendary):
-    with open(LEGENDARY_FILE, 'w', encoding='utf-8') as f:
-        json.dump(legendary, f, ensure_ascii=False, indent=2)
+    with get_db() as conn:
+        conn.executemany(
+            'INSERT OR REPLACE INTO legendary (species_id, ip) VALUES (?, ?)',
+            ((int(species_id), ip) for species_id, ip in legendary.items())
+        )
+        conn.commit()
+
+# Auto-migrate on module load
+migrate_to_sqlite()
 
 def load_player_names():
     if not os.path.exists(PLAYERS_FILE):
@@ -338,6 +396,32 @@ def run_catch_up(pet):
     pet['energy'] = clamp(pet['energy'] - ENERGY_DECAY * elapsed)
     pet['age_hours'] = float(pet.get('age_hours', 0.0)) + elapsed
 
+    # --- Poop generation ---
+    poops = pet.get('poops', [])
+    if poops is None:
+        poops = []
+    last_poop_time = poops[-1]['created_at'] if poops else pet.get('last_updated', now)
+    poop_elapsed = max(0.0, now - last_poop_time) / 3600.0
+
+    while poop_elapsed > 0:
+        interval = random.uniform(POOP_AVG_INTERVAL - POOP_INTERVAL_SPREAD, POOP_AVG_INTERVAL + POOP_INTERVAL_SPREAD)
+        if poop_elapsed >= interval:
+            poops.append({'created_at': last_poop_time + interval * 3600})
+            last_poop_time += interval * 3600
+            poop_elapsed -= interval
+        else:
+            break
+
+    if len(poops) > MAX_POOPS:
+        poops = poops[-MAX_POOPS:]
+
+    pet['poops'] = poops
+
+    # --- Poop happiness penalty ---
+    if poops:
+        poop_penalty = len(poops) * POOP_HAPPINESS_PENALTY * elapsed
+        pet['happiness'] = clamp(pet['happiness'] - poop_penalty)
+
     sick = derive_sick(pet)
     pet['sick'] = sick
     if sick:
@@ -371,6 +455,8 @@ def new_pet(species_id):
         'in_center': START_STATE['in_center'],
         'center_since': START_STATE['center_since'],
         'last_updated': time.time(),
+        'last_action_time': 0,
+        'poops': [],  # list of {created_at: epoch}
     }
 
 def format_age(hours):
@@ -407,6 +493,9 @@ def pet_to_client(pet, ip):
         'center_since': pet.get('center_since'),
         'center_text': format_duration(time.time() - float(pet['center_since'])) if (pet.get('in_center') and pet.get('center_since')) else None,
         'player_name': resolve_player_name(ip),
+        'tier': 'mythical' if pet['species_id'] in MYTHICAL_IDS else ('legendary' if pet['species_id'] in LEGENDARY_IDS else 'normal'),
+        'cooldown_remaining': max(0, int(60 - (time.time() - pet.get('last_action_time', 0)))),
+        'poop_count': len(pet.get('poops', [])),
     }
 
 # ============================================================
@@ -422,6 +511,17 @@ HTML_PAGE = """<!DOCTYPE html>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.14/dist/full.min.css" rel="stylesheet" type="text/css" />
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        @keyframes pet-bounce {
+            0%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-15px); }
+            50% { transform: translateY(0); }
+            70% { transform: translateY(-8px); }
+        }
+        .pet-bouncing {
+            animation: pet-bounce 0.6s ease;
+        }
+    </style>
 </head>
 <body class="min-h-screen bg-gradient-to-br from-amber-100 via-orange-100 to-rose-100 flex items-center justify-center p-4">
 
@@ -449,6 +549,7 @@ HTML_PAGE = """<!DOCTYPE html>
                     <img id="pet-sprite" src="" alt="pet" class="w-64 h-64 object-contain image-render-pixel">
                     <div id="sprite-overlay" class="absolute inset-0 flex items-center justify-center text-7xl pointer-events-none hidden"></div>
                 </div>
+                <div id="poop-container" class="flex justify-center gap-1 mt-1" style="min-height: 28px;"></div>
                 <div>
                     <h2 id="pet-name" class="text-2xl font-bold"></h2>
                     <p id="pet-age" class="text-sm text-neutral-500"></p>
@@ -469,7 +570,7 @@ HTML_PAGE = """<!DOCTYPE html>
                         <div class="flex justify-between text-sm mb-1"><span>⚡ Năng lượng</span><span id="energy-txt"></span></div>
                         <progress id="energy-bar" class="progress progress-info" value="0" max="100"></progress>
                     </div>
-                    <div>
+                    <div class="hidden">
                         <div class="flex justify-between text-sm mb-1"><span>❤️ Sức khỏe</span><span id="health-txt"></span></div>
                         <progress id="health-bar" class="progress progress-success" value="0" max="100"></progress>
                     </div>
@@ -479,7 +580,7 @@ HTML_PAGE = """<!DOCTYPE html>
                     <button id="btn-feed" onclick="doAction('feed')" class="btn btn-success btn-sm">🍖 Ăn</button>
                     <button id="btn-play" onclick="doAction('play')" class="btn btn-warning btn-sm">🎮 Chơi</button>
                     <button id="btn-sleep" onclick="doAction('sleep')" class="btn btn-info btn-sm">😴 Ngủ</button>
-                    <button id="btn-heal" onclick="doAction('heal')" class="btn btn-error btn-sm">💊 Chữa</button>
+                    <button id="btn-heal" onclick="doAction('heal')" class="btn btn-error btn-sm" style="display:none">💊 Chữa</button>
                     <button id="btn-clean" onclick="doAction('clean')" class="btn btn-secondary btn-sm">🧼 Dọn</button>
                 </div>
 
@@ -569,10 +670,14 @@ HTML_PAGE = """<!DOCTYPE html>
 
         function renderMain(s) {
             IN_CENTER = !!s.in_center;
+            var cd = s.cooldown_remaining || 0;
             document.getElementById('pet-sprite').src = s.sprite;
             const sick = s.sick || s.health < 30;
             document.getElementById('pet-sprite').style.filter = sick ? 'grayscale(80%)' : 'none';
-            document.getElementById('pet-name').innerText = s.name;
+            var tierHtml = '';
+            if (s.tier === 'legendary') tierHtml = ' <span class="badge badge-warning">⭐ Huyền thoại</span>';
+            if (s.tier === 'mythical') tierHtml = ' <span class="badge badge-secondary">✨ Bí ẩn</span>';
+            document.getElementById('pet-name').innerHTML = escapeHtml(s.name) + tierHtml;
             document.getElementById('pet-age').innerText = 'Tuổi: ' + s.age_text;
             document.getElementById('player-name').innerText = s.player_name;
 
@@ -600,7 +705,63 @@ HTML_PAGE = """<!DOCTYPE html>
             } else {
                 centerStatus.classList.add('hidden');
                 centerBtn.innerText = '🏥 Gửi vào Trung Tâm';
-                actionBtns.forEach(function (id) { document.getElementById(id).disabled = false; });
+                // Cooldown cho action buttons
+                actionBtns.forEach(function (id) {
+                    var btn = document.getElementById(id);
+                    if (cd > 0 && !IN_CENTER) {
+                        btn.disabled = true;
+                        if (!btn.dataset.originalText) {
+                            btn.dataset.originalText = btn.innerText;
+                        }
+                        btn.innerText = btn.dataset.originalText + ' (' + cd + 's)';
+                    } else if (!IN_CENTER) {
+                        btn.disabled = false;
+                        if (btn.dataset.originalText) {
+                            btn.innerText = btn.dataset.originalText;
+                        }
+                    }
+                });
+            }
+
+            // Start cooldown countdown timer
+            if (window.__cdTimer) clearInterval(window.__cdTimer);
+            if (cd > 0) {
+                window.__cdTimer = setInterval(function () {
+                    cd--;
+                    if (cd <= 0) {
+                        clearInterval(window.__cdTimer);
+                        actionBtns.forEach(function (id) {
+                            var btn = document.getElementById(id);
+                            btn.disabled = false;
+                            if (btn.dataset.originalText) btn.innerText = btn.dataset.originalText;
+                        });
+                    } else {
+                        actionBtns.forEach(function (id) {
+                            var btn = document.getElementById(id);
+                            if (btn.dataset.originalText) {
+                                btn.innerText = btn.dataset.originalText + ' (' + cd + 's)';
+                            }
+                        });
+                    }
+                }, 1000);
+            }
+
+            // Hiển thị phân
+            var poopContainer = document.getElementById('poop-container');
+            poopContainer.innerHTML = '';
+            for (var i = 0; i < (s.poop_count || 0); i++) {
+                var poop = document.createElement('span');
+                poop.textContent = '💩';
+                poop.style.fontSize = '20px';
+                poopContainer.appendChild(poop);
+            }
+
+            // Nút Clean hiển thị số cục phân
+            var cleanBtn = document.getElementById('btn-clean');
+            if (s.poop_count > 0) {
+                cleanBtn.innerText = '🧼 Dọn (' + s.poop_count + ')';
+            } else {
+                cleanBtn.innerText = '🧼 Dọn';
             }
         }
 
@@ -616,12 +777,16 @@ HTML_PAGE = """<!DOCTYPE html>
             socket.emit('pet_action', { action: action });
             if (action === 'sleep') { showOverlay('💤'); }
             if (action === 'feed') { showOverlay('🍖'); }
+            if (action === 'play') { showOverlay('🎾'); }
         }
 
         function showOverlay(emoji) {
             const ov = document.getElementById('sprite-overlay');
             ov.innerText = emoji;
             ov.classList.remove('hidden');
+            const sprite = document.getElementById('pet-sprite');
+            sprite.classList.add('pet-bouncing');
+            setTimeout(function () { sprite.classList.remove('pet-bouncing'); }, 600);
             if (window.__overlayTimer) { clearTimeout(window.__overlayTimer); }
             window.__overlayTimer = setTimeout(function () { ov.classList.add('hidden'); ov.innerText = ''; }, 2000);
         }
@@ -679,9 +844,6 @@ def pet_index():
 
 def pet_adopt():
     ip = request.remote_addr
-    pets = load_pets()
-    if ip in pets:
-        return jsonify({'ok': False, 'error': 'Bạn đã có pet rồi'})
     try:
         species_id = int(request.form.get('species_id', ''))
     except (TypeError, ValueError):
@@ -690,15 +852,46 @@ def pet_adopt():
         return jsonify({'ok': False, 'error': 'Loài không hợp lệ'})
 
     tier = 'mythical' if species_id in MYTHICAL_IDS else ('legendary' if species_id in LEGENDARY_IDS else 'normal')
-    if tier != 'normal':
-        legendary = load_legendary()
-        if str(species_id) in legendary:
-            return jsonify({'ok': False, 'error': 'Pokémon này đã có chủ!'}), 409
-        legendary[str(species_id)] = ip
-        save_legendary(legendary)
 
-    pets[ip] = new_pet(species_id)
-    save_pets(pets)
+    with get_db() as conn:
+        # 1. Verify spin state
+        row = conn.execute(
+            'SELECT species_ids, created_at FROM spin_state WHERE ip = ?', (ip,)
+        ).fetchone()
+        if not row:
+            return jsonify({'ok': False, 'error': 'Vui lòng quay lại để chọn Pokémon'})
+        species_ids_json, created_at = row
+        if time.time() - created_at > 120:
+            conn.execute('DELETE FROM spin_state WHERE ip = ?', (ip,))
+            conn.commit()
+            return jsonify({'ok': False, 'error': 'Hết thời gian, vui lòng quay lại'})
+        allowed_ids = json.loads(species_ids_json)
+        if species_id not in allowed_ids:
+            return jsonify({'ok': False, 'error': 'Pokémon không hợp lệ'})
+
+        # 2. Check IP already has pet
+        row = conn.execute('SELECT 1 FROM pets WHERE ip = ?', (ip,)).fetchone()
+        if row:
+            return jsonify({'ok': False, 'error': 'Bạn đã có pet rồi'})
+
+        # 3. Claim legendary if applicable
+        if tier != 'normal':
+            conn.execute('INSERT OR IGNORE INTO legendary (species_id, ip) VALUES (?, ?)',
+                         (species_id, ip))
+            if conn.total_changes == 0:
+                return jsonify({'ok': False, 'error': 'Pokémon này đã có chủ!'}), 409
+
+        # 4. Create pet
+        conn.execute('INSERT OR IGNORE INTO pets (ip, data) VALUES (?, ?)',
+                     (ip, json.dumps(new_pet(species_id), ensure_ascii=False)))
+        if conn.total_changes == 0:
+            return jsonify({'ok': False, 'error': 'Bạn đã có pet rồi'})
+
+        # 5. Delete spin state
+        conn.execute('DELETE FROM spin_state WHERE ip = ?', (ip,))
+
+        conn.commit()
+
     return jsonify({'ok': True})
 
 def serve_sprite(filename):
@@ -706,52 +899,117 @@ def serve_sprite(filename):
     return send_from_directory(sprites_dir, filename)
 
 def pet_spin():
-    return jsonify({'slots': generate_spin()})
+    ip = request.remote_addr
+    now = time.time()
+
+    # Rate-limit: 1 spin / 2 seconds
+    last_spin = _spin_cooldowns.get(ip, 0)
+    if now - last_spin < 2:
+        return jsonify({'slots': [], 'error': 'Quay nhanh quá! Đợi 2 giây nhé.'})
+    _spin_cooldowns[ip] = now
+
+    slots = generate_spin()
+    species_ids = [s['species_id'] for s in slots]
+    with get_db() as conn:
+        conn.execute('DELETE FROM spin_state WHERE created_at < ?', (now - 120,))
+        conn.execute(
+            'INSERT OR REPLACE INTO spin_state (ip, species_ids, created_at) VALUES (?, ?, ?)',
+            (ip, json.dumps(species_ids), now)
+        )
+        conn.commit()
+    return jsonify({'slots': slots})
 
 def handle_pet_action(data):
     ip = request.remote_addr
-    pets = load_pets()
-    pet = pets.get(ip)
-    if pet is None:
-        return
     action = data.get('action')
 
     if action == 'release':
-        species_id = pet.get('species_id')
-        del pets[ip]
-        save_pets(pets)
-        if species_id in LEGENDARY_IDS or species_id in MYTHICAL_IDS:
-            legendary = load_legendary()
-            if legendary.get(str(species_id)) == ip:
-                del legendary[str(species_id)]
-                save_legendary(legendary)
+        with get_db() as conn:
+            row = conn.execute('SELECT data FROM pets WHERE ip = ?', (ip,)).fetchone()
+            if not row:
+                return
+            pet = json.loads(row[0])
+            species_id = pet.get('species_id')
+            conn.execute('DELETE FROM pets WHERE ip = ?', (ip,))
+            if species_id in LEGENDARY_IDS or species_id in MYTHICAL_IDS:
+                conn.execute('DELETE FROM legendary WHERE species_id = ? AND ip = ?', (species_id, ip))
+            conn.commit()
         emit('pet_released', {}, to=request.sid)
         return
 
+    # Center: SELECT + UPDATE trong cùng 1 transaction
     if action == 'center':
-        pet['in_center'] = True
-        pet['center_since'] = time.time()
-        pet['last_updated'] = time.time()
-        save_pets(pets)
+        with get_db() as conn:
+            row = conn.execute('SELECT data FROM pets WHERE ip = ?', (ip,)).fetchone()
+            if not row:
+                return
+            pet = json.loads(row[0])
+            pet['in_center'] = True
+            pet['center_since'] = time.time()
+            pet['last_updated'] = time.time()
+            conn.execute('UPDATE pets SET data = ? WHERE ip = ?', (json.dumps(pet, ensure_ascii=False), ip))
+            conn.commit()
         emit('pet_update', pet_to_client(pet, ip), to=request.sid)
         return
 
+    # Receive: SELECT + UPDATE trong cùng 1 transaction
     if action == 'receive':
-        pet['in_center'] = False
-        pet['center_since'] = None
-        pet['last_updated'] = time.time()
-        save_pets(pets)
+        with get_db() as conn:
+            row = conn.execute('SELECT data FROM pets WHERE ip = ?', (ip,)).fetchone()
+            if not row:
+                return
+            pet = json.loads(row[0])
+            pet['in_center'] = False
+            pet['center_since'] = None
+            pet['last_updated'] = time.time()
+            conn.execute('UPDATE pets SET data = ? WHERE ip = ?', (json.dumps(pet, ensure_ascii=False), ip))
+            conn.commit()
         emit('pet_update', pet_to_client(pet, ip), to=request.sid)
         return
+
+    # Các action còn lại: SELECT + run_catch_up + modify + UPDATE
+    with get_db() as conn:
+        row = conn.execute('SELECT data FROM pets WHERE ip = ?', (ip,)).fetchone()
+        if not row:
+            return
+        pet = json.loads(row[0])
 
     run_catch_up(pet)
+
+    if action == 'clean':
+        poops = pet.get('poops', [])
+        if poops:
+            poops.pop(0)
+            pet['poops'] = poops
+            pet['happiness'] = clamp(pet['happiness'] + 5)
+            pet['health'] = clamp(pet['health'] + 5)
+        pet['last_updated'] = time.time()
+        with get_db() as conn:
+            conn.execute('UPDATE pets SET data = ? WHERE ip = ?', (json.dumps(pet, ensure_ascii=False), ip))
+            conn.commit()
+        emit('pet_update', pet_to_client(pet, ip), to=request.sid)
+        return
+
     if action not in ACTIONS:
+        emit('pet_update', pet_to_client(pet, ip), to=request.sid)
         return
     if pet.get('in_center'):
+        emit('pet_update', pet_to_client(pet, ip), to=request.sid)
         return
+
+    # Cooldown check
+    now = time.time()
+    last_action = pet.get('last_action_time', 0)
+    if now - last_action < 60:
+        emit('pet_update', pet_to_client(pet, ip), to=request.sid)
+        return
+
     apply_action(pet, action)
+    pet['last_action_time'] = time.time()
     pet['last_updated'] = time.time()
-    save_pets(pets)
+    with get_db() as conn:
+        conn.execute('UPDATE pets SET data = ? WHERE ip = ?', (json.dumps(pet, ensure_ascii=False), ip))
+        conn.commit()
     emit('pet_update', pet_to_client(pet, ip), to=request.sid)
 
 def register(app, socketio_instance):

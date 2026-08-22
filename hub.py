@@ -1,6 +1,7 @@
 import socket
 import json
 import os
+import secrets
 import sys
 from flask import Flask, request, redirect
 from flask_socketio import SocketIO
@@ -17,7 +18,7 @@ sys.path.insert(0, os.path.join(BASE_DIR, 'pet-game'))
 import pet_game
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'hub-secret'
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', secrets.token_hex(32))
 socketio = SocketIO(app, cors_allowed_origins=[])
 
 HUB_HTML = """

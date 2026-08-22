@@ -4,15 +4,77 @@ Nhật ký thay đổi theo version. PM agent ghi vào đây khi release.
 
 ---
 
-## [v2.6.1] - 2026-08-21
+## [v3.1.15] - 2026-08-21
+
+### Changed
+- **Layout**: `#info` và `#role` giờ cùng 1 hàng (flex justify-between): info trái, role phải. `#turn-timer` tách thành card riêng fixed bên trái (`#timer-card`, tương tự `#player-list` bên phải).
+- **Màu quân cờ**: X → `#e53935` (đỏ tươi), O → `#27ae60` (xanh lá, trở về như trước DaisyUI). Đồng bộ player list.
+- `VERSION` = "v3.1.15"
+
+## [v3.1.14] - 2026-08-21
 
 ### Fixed
-- **Cảnh báo nguy hiểm bỏ sót broken-three sát biên**: pattern `_ _ X X _ X _ |` (2 đầu hở, sát mép) trước không cảnh báo dù lấp gap tạo **Open Four (thắng chắc)** — do điều kiện cũ đòi `open2` (≥2 ô trống). Sửa nhánh "Broken Three" (`total == 3`) theo đúng luật (BA xác nhận): flag khi **cả 2 đầu hở** (`backward_open and gap_end_open`), không flag khi 1 đầu bị O chặn.
-- **Cảnh báo nguy hiểm bỏ sót broken-four 1 đầu biên**: pattern `_ O X X _ X X |` (total==4, 1 đầu O + 1 đầu biên) trước không cảnh báo dù lấp gap → **5 quân thắng**. Sửa nhánh "Broken Four" (`total == 4`) dùng logic `opponent_blocks < 2` (đồng bộ `check_win`) thay vì `(backward_open or gap_end_open)` đơn giản.
+- **Layout shift: nội dung động đẩy bàn cờ nhảy lên xuống**: thêm `min-height` cố định cho `#roomTitle`, `#info`, `#result`, `#turn-timer`, `#role` → dành chỗ trước, không thay đổi chiều cao khi nội dung động thay đổi. Đổi `#turn-timer` từ `display: none` sang `visibility: hidden` để giữ chỗ trong layout flow.
 
----
+### Changed
+- `VERSION` = "v3.1.14"
 
-## [v2.6] - 2026-08-20
+## [v3.1.13] - 2026-08-21
+
+### Fixed
+- **Màn hình đánh cờ bị giật khi đặt quân**: tối ưu CSS (`overflow: auto`, xóa `transition` trên `.cell`, thêm `contain: layout style` trên `#board`) và JS (bọc `updateBoard` DOM writes trong `requestAnimationFrame`) → giảm reflow/jank.
+- **3 nút Undo, Đầu hàng, Rời phòng không cân đối**: thêm `btn-sm` đồng bộ kích thước, đổi layout từ `grid` sang `flex justify-center` → căn giữa đều khi nút Đầu hàng ẩn.
+
+### Added
+- **Khung bàn cờ nhấp nháy đỏ khi gần hết giờ**: animation `board-urgent` (border-color + box-shadow đỏ) trên `#board-wrapper` khi `turn_seconds <= min(10, roomTurnSeconds * 0.25)`.
+
+### Changed
+- `VERSION` = "v3.1.13"
+
+## [v3.1] - 2026-08-21
+
+### Added
+- **Nút Undo — xin phép đối thủ đi lại**: người chơi lỡ click nhầm → bấm `↩ Undo` → đối thủ nhận popup confirm → đồng ý → nước cuối bị xoá, trả lượt. Backend: `move_history` + event `undo_request`/`undo_accept`. Frontend: nút tự động ẩn/hiện theo lượt.
+
+### Changed
+- `VERSION` = "v3.1"
+
+## [v3.0] - 2026-08-21
+
+### Added
+- **UI overhaul DaisyUI**: giao diện hoàn toàn mới dùng DaisyUI + Tailwind CSS. Lobby dạng card với badge trạng thái (`success`/`warning`/`error`), seat panel, board, chat box, player list đều được thiết kế lại hiện đại. Giữ nguyên toàn bộ logic JS/SocketIO.
+
+### Fixed
+- **Validate row/col trong handle_move**: thêm `isinstance(row, int)` + `0 <= row/col < BOARD_SIZE` → chặn negative index, out-of-range, type injection từ client.
+- **1 IP chỉ được ngồi 1 ghế trên TOÀN bộ phòng**: `handle_sit` quét toàn bộ `rooms` → 1 máy không thể mở nhiều tab ngồi X ở phòng này, O ở phòng khác.
+- **Seat panel xếp 1 hàng ngang**: CSS `flex-direction: row` + `flex-wrap: wrap` → Ghế X/O/Đứng lên nằm gọn 1 hàng, không đè nút Đầu hàng.
+
+### Changed
+- `VERSION` = "v3.0"
+- `ALLOW_SAME_IP` = `False` (chặn trùng IP, phù hợp deploy LAN thật)
+- 6 phòng với thời gian đa dạng: Tiêu chuẩn (45s) x3, Siêu nhanh (15s), Không suy nghĩ (5s), Siêu chậm (180s)
+
+## [v2.7.0] - 2026-08-21
+
+### Added
+- **Cấu hình thời gian mỗi nước theo từng phòng (per-room `turn_seconds`)**: 4 phòng với thời gian khác nhau:
+  - Phòng Nhanh 🔥 30s/nước
+  - Phòng Thường 🕐 60s/nước
+  - Phòng Chậm 🐢 120s/nước
+  - Phòng Tự Do 🐢 180s/nước
+- Hiển thị thời gian ở lobby (`"Phòng Nhanh (30s 🔥) — Trống"`) và trong phòng (`roomTitle`)
+- Phòng động mới tạo dùng `TURN_SECONDS = 40s` làm fallback
+
+### Changed
+- `VERSION` = "v2.7.0"
+- Đổi tên phòng: Phòng 1→Nhanh, Phòng 2→Thường, Phòng 3→Chậm, Phòng 4→Tự Do
+
+## [v2.6.4] - 2026-08-21
+
+### Fixed
+- **Broken Three false positive — O án ngữ sau đầu hở vẫn bị cảnh báo (regression v2.6.3)**: pattern `_ O _ X X _ X _` bị flag là Broken Three, nhưng thực tế O án ngữ phía sau biến hướng mở rộng trái thành "ngõ cụt" (mở rộng trái → chuỗi 5 quân bị O chặn 2 đầu → không thắng). Sửa: trong nhánh Broken Three (`total == 3`), thêm kiểm tra ô beyond (cách ô mở 1 bước) không được là quân đối thủ. Nếu là đối thủ → không flag. Thêm test case T9-T12 (17/17 PASS).
+
+## [v2.6.3] - 2026-08-21
 
 ### Added
 - **Đồng hồ đếm ngược (40 giây/nước)**: `TURN_SECONDS=40`, `turn_clock_worker` đếm ngược mỗi nước; hết giờ → người tới lượt **tính thua** (đối thủ thắng); hiển thị đồng hồ `#turn-timer`.
@@ -21,12 +83,12 @@ Nhật ký thay đổi theo version. PM agent ghi vào đây khi release.
 - **Hiển thị tên người thắng**: payload `game_over` thêm `winner_name`; tách khu kết quả `#result` riêng để countdown không ghi đè tên; hiển thị "Tên (quân) THẮNG!" cho thắng thường + đầu hàng + hết giờ.
 - **Xóa chat_history khi phòng trống hoàn toàn**: `handle_disconnect` reset chat + bàn khi không còn player nào (kể cả khán giả).
 - **Rate-limit chat server-side**: giới hạn 1 tin/giây theo sid + `message[:200]`.
+- **Cảnh báo nguy hiểm bỏ sót broken-three sát biên**: pattern `_ _ X X _ X _ |` (2 đầu hở, sát mép) trước không cảnh báo dù lấp gap tạo **Open Four (thắng chắc)** — do điều kiện cũ đòi `open2` (≥2 ô trống). Sửa nhánh "Broken Three" (`total == 3`) theo đúng luật (BA xác nhận): flag khi **cả 2 đầu hở** (`backward_open and gap_end_open`), không flag khi 1 đầu bị O chặn.
+- **Cảnh báo nguy hiểm bỏ sót broken-four 1 đầu biên**: pattern `_ O X X _ X X |` (total==4, 1 đầu O + 1 đầu biên) trước không cảnh báo dù lấp gap → **5 quân thắng**. Sửa nhánh "Broken Four" (`total == 4`) dùng logic `opponent_blocks < 2` (đồng bộ `check_win`) thay vì `(backward_open or gap_end_open)` đơn giản.
 
 ### Removed
 - Nút Bật/Tắt cảnh báo nguy hiểm (threat toggle) — threat luôn hiển thị.
 
-### Changed
-- `VERSION` = "v2.6"
 
 ---
 
