@@ -10,7 +10,7 @@ socketio = None
 
 # --- TRẠNG THÁI GAME ---
 BOARD_SIZE = 20 # BẠN CÓ THỂ ĐỔI THÀNH SỐ BẤT KỲ (15, 20, 25...)
-VERSION = "v3.1.13"
+VERSION = "v3.1.15"
 COUNTDOWN_SECONDS = 8
 IDLE_SECONDS = 180
 IDLE_CHECK_INTERVAL = 10
@@ -89,8 +89,8 @@ HTML_PAGE = f"""
             user-select: none;
             }}
         .cell:hover {{ background: oklch(var(--wa) / 0.5); transition: background 0.1s; }}
-        .X {{ color: #e74c3c !important; }}
-        .O {{ color: #3498db !important; }}
+        .X {{ color: #e53935 !important; }}
+        .O {{ color: #27ae60 !important; }}
         .last-move {{
             background: oklch(var(--su) / 0.4) !important;
             box-shadow: inset 0 0 8px rgba(0,0,0,0.4);
@@ -114,8 +114,8 @@ HTML_PAGE = f"""
             color: oklch(var(--p));
         }}
         .player-item {{ padding: 4px 0; font-size: 14px; }}
-        .piece-x {{ color: oklch(var(--er)); font-weight: bold; }}
-        .piece-o {{ color: oklch(var(--p)); font-weight: bold; }}
+        .piece-x {{ color: #e53935; font-weight: bold; }}
+        .piece-o {{ color: #27ae60; font-weight: bold; }}
         .piece-spec {{ color: oklch(var(--bc) / 0.5); }}
         #version {{ color: oklch(var(--bc) / 0.3); }}
         @keyframes timer-urgent {{
@@ -135,6 +135,11 @@ HTML_PAGE = f"""
         .board-urgent {{
             animation: board-urgent 0.8s ease-in-out infinite;
         }}
+        #roomTitle {{ min-height: 2rem; }}
+        #info {{ min-height: 1.75rem; }}
+        #result {{ min-height: 1.75rem; }}
+        #turn-timer {{ min-height: 1.75rem; }}
+        #role {{ min-height: 1.5rem; }}
     </style>
 </head>
 <body class="bg-base-200 min-h-screen">
@@ -152,27 +157,23 @@ HTML_PAGE = f"""
         <div id="game" style="display: none;">
             <div class="max-w-4xl mx-auto">
                 <h2 id="roomTitle" class="text-2xl font-bold text-error mb-1"></h2>
-                <div id="info" class="text-lg font-semibold text-base-content mb-2">Đang kết nối...</div>
+                <div class="flex justify-between items-center mb-2">
+                    <div id="info" class="text-lg font-semibold text-base-content">Đang kết nối...</div>
+                    <div id="role" class="text-base text-base-content/70"></div>
+                </div>
                 <div id="result" class="text-xl font-bold text-success mb-2"></div>
-                <div id="turn-timer" class="text-lg text-warning mb-2"></div>
-                <div id="role" class="text-base text-base-content/70 mb-4"></div>
 
                 <div id="seat-panel" class="card bg-base-100 shadow p-4 mb-4">
                     <div style="display: flex; flex-direction: row; justify-content: center; align-items: center; gap: 12px; flex-wrap: wrap;">
+                        <button id="sit-x-btn" onclick="sit('X')" style="display:none;" class="btn btn-sm">Ngồi</button>
                         <span class="badge badge-error font-bold">X</span>
                         <span id="seat-x-name">Trống</span>
-                        <button id="sit-x-btn" onclick="sit('X')" style="display:none;" class="btn btn-sm">Ngồi X</button>
-                        <span class="badge badge-primary font-bold">O</span>
+                        <span class="text-2xl">🪑🪑</span>
                         <span id="seat-o-name">Trống</span>
-                        <button id="sit-o-btn" onclick="sit('O')" style="display:none;" class="btn btn-sm">Ngồi O</button>
+                        <span class="badge badge-primary font-bold">O</span>
+                        <button id="sit-o-btn" onclick="sit('O')" style="display:none;" class="btn btn-sm">Ngồi</button>
                         <button id="stand-btn" onclick="stand()" style="display:none;" class="btn btn-sm btn-ghost">Đứng lên</button>
 </div>
-                </div>
-
-                <div class="flex justify-center items-center gap-4 my-2 text-base-content/30">
-                    <div class="h-px flex-1 bg-base-300"></div>
-                    <span class="text-2xl">🪑🪑</span>
-                    <div class="h-px flex-1 bg-base-300"></div>
                 </div>
 
                 <div id="board-wrapper" style="overflow: auto; max-width: 100%; overscroll-behavior: contain;" class="card bg-base-100 shadow-xl p-4 mb-4">
@@ -210,6 +211,10 @@ HTML_PAGE = f"""
     <div id="player-list" class="card bg-base-100 shadow fixed top-24 right-4 w-48 z-40 p-4" style="display: none;">
         <h4 class="font-bold text-base-content mb-2 pb-2 border-b border-base-300">👥 Người chơi</h4>
         <div id="player-list-content"></div>
+    </div>
+
+    <div id="timer-card" class="card bg-base-100 shadow fixed top-24 left-4 z-40 p-4" style="display: none;">
+        <div id="turn-timer" class="text-lg text-warning"></div>
     </div>
 
     <div id="version" class="text-xs fixed bottom-2 right-4 z-50">{VERSION}</div>
@@ -385,7 +390,7 @@ HTML_PAGE = f"""
             const t = document.getElementById('turn-timer');
             if (data.seconds > 0) {{
                 turnTimerSeconds = data.seconds;
-                t.style.display = 'inline-block';
+                document.getElementById('timer-card').style.display = 'block';
                 t.innerText = '⏱ còn ' + data.seconds + 's';
                 const urgent = data.seconds <= Math.min(10, roomTurnSeconds * 0.25);
                 const bw = document.getElementById('board-wrapper');
@@ -437,7 +442,7 @@ HTML_PAGE = f"""
             const t = document.getElementById('turn-timer');
             t.innerText = '';
             t.classList.remove('timer-urgent');
-            t.style.display = 'none';
+            document.getElementById('timer-card').style.display = 'none';
             document.getElementById('board-wrapper').classList.remove('board-urgent');
         }}
 
